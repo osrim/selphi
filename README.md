@@ -57,6 +57,10 @@ For each photo, `prepare`:
 5. Moves the source to the archive folder. An existing file is never
    replaced: `photo.jpg` becomes `photo-2.jpg`, then `photo-3.jpg`.
 
+Each output holds a placement record: a private APP15 segment with the
+orientation and the distance from each canvas edge to the picture.
+`selphy adjust` reads it.
+
 The output has no Exif unless `--camera-ref` is given. Hidden files, such as
 the `._name.jpg` files macOS writes on external drives, are skipped.
 
@@ -132,6 +136,31 @@ confirm.
 The readings need a terminal. Without one, `calibrate` writes the sheet and
 tells you the command to enter the readings later.
 
+### `selphy adjust`
+
+Corrects the trims from measurements of a printed photo. This is finer than
+`calibrate`, which measures in 0.5 mm steps.
+
+```sh
+selphy adjust out/photo.jpg
+```
+
+Print a JPEG from `selphy prepare` Borderless, and hold the card in the
+orientation it was printed. For each edge, `adjust` asks for a number in mm:
+
+- Positive: white showed between the picture and the card edge.
+- Negative: the picture was cut by that amount.
+- 0 (the default): the picture reached the edge.
+
+The new trim on each edge is the recorded margin minus the number entered, so
+edges with planned white, such as the top and bottom of a 16:9 photo, give
+correct results too. `adjust` then shows the trims before and after, and saves
+them to the config file when you confirm. It stops with an error when a trim
+would be below 0 or more than half the canvas side.
+
+The file must hold a placement record. JPEGs from the old bash scripts do not;
+prepare the photo again. The prompts need a terminal.
+
 ## Configuration
 
 The config file is `~/.config/selphy/printer.toml`. `$XDG_CONFIG_HOME` moves
@@ -157,19 +186,6 @@ To edit the values: run `selphy config --init`, then open the file with
 `$EDITOR "$(selphy config --path)"`. `selphy` rewrites the file, so comments
 added by hand are not kept.
 
-### Correcting the trims from a print
-
-`selphy calibrate` measures each trim to within 0.5 mm. To correct a trim
-more finely, print a prepared 3:2 photo, which `prepare` reports as `edge to edge`. Any
-white on that card is trim error, not margin. Measure each edge:
-
-- White border on an edge: the trim is smaller than configured. Subtract the
-  white from that edge's trim.
-- Picture cut off on an edge: the trim is larger. Add the lost amount.
-
-Use `selphy config` to see which trim key belongs to which edge of a portrait
-print.
-
 ## Development
 
 ```sh
@@ -185,5 +201,7 @@ cargo fmt --check
 | `src/geometry/placement.rs` | `place()`: fit and capped stretch inside the safe box |
 | `src/imaging.rs` | Decoding, sRGB conversion, resize and sharpen, JPEG encoding |
 | `src/calibrate.rs` | The bracket sheet, and readings to trims |
+| `src/record.rs` | The placement record: writing, finding and parsing it |
+| `src/adjust.rs` | Measurements from a print to corrected trims |
 | `src/prepare.rs` | Collecting inputs, preparing one photo, archiving, the batch |
 | `src/main.rs`, `src/cli/` | The command line: one module per command |

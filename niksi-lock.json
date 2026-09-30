@@ -1,0 +1,50 @@
+{
+  "lockfileVersion": 1,
+  "skills": {
+    "coding-guidelines": {
+      "source": "https://github.com/actionbook/rust-skills",
+      "branch": "main",
+      "path": "skills/coding-guidelines",
+      "commit": "ac5853d230662cc26ace57af995efc52fe7b4309",
+      "integrity": "sha256-PugwJOWo+Z8NXMuP+2eT4lNXWEvI08zZpdWqVqV3CsA=",
+      "track": "auto",
+      "tag": "v2.0.9"
+    },
+    "domain-cli": {
+      "source": "https://github.com/actionbook/rust-skills",
+      "branch": "main",
+      "path": "skills/domain-cli",
+      "commit": "ac5853d230662cc26ace57af995efc52fe7b4309",
+      "integrity": "sha256-2VfgTu+cd6ElYU8+d7BFOD3wdbrVaW/Qq47aK+9uzwI=",
+      "track": "auto",
+      "tag": "v2.0.9"
+    },
+    "gpui-kit": {
+      "source": "https://github.com/longbridge/gpui-kit",
+      "branch": "main",
+      "path": "skills/gpui-kit",
+      "commit": "0c830f4d257e69fdd17200650533ab4ca9a40cc0",
+      "integrity": "sha256-0i3uqWhOYkwuk4gksjNoMCt+Yt8HbmB7rIj/MF2/6v0=",
+      "track": "auto",
+      "tag": "v0.7.0"
+    },
+    "gpui-kit-design-guides": {
+      "source": "https://github.com/longbridge/gpui-kit",
+      "branch": "main",
+      "path": "skills/gpui-kit-design-guides",
+      "commit": "0c830f4d257e69fdd17200650533ab4ca9a40cc0",
+      "integrity": "sha256-LvxQPSKP5BSLWGxEpZvXdDYq5mF9Ce8NDp7X5faXkVE=",
+      "track": "auto",
+      "tag": "v0.7.0"
+    },
+    "unsafe-checker": {
+      "source": "https://github.com/actionbook/rust-skills",
+      "branch": "main",
+      "path": "skills/unsafe-checker",
+      "commit": "ac5853d230662cc26ace57af995efc52fe7b4309",
+      "integrity": "sha256-JOeTIYZBl+TaC83bbnf2TTs0QkxKKFtT52Vl8aQvfWM=",
+      "track": "auto",
+      "tag": "v2.0.9"
+    }
+  }
+}
