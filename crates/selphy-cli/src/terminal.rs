@@ -123,7 +123,7 @@ impl Terminal {
     }
 }
 
-/// A paper's profile before and after new trims, with the orientation the
+/// The profile before and after new trims, with the orientation the
 /// trims were measured in.
 pub struct Change {
     pub before: Profile,
@@ -153,9 +153,8 @@ pub fn print_changes(term: &mut Terminal, change: &Change) -> Result<()> {
 }
 
 /// Warns on stderr for each trim that the change makes while an env var
-/// overrides it, then asks whether to save the new profile as the profile of
-/// `loaded.paper`, and saves it on yes. With `yes`, it saves without asking.
-/// The other papers' tables are kept.
+/// overrides it, then asks whether to save the new profile, and saves it on
+/// yes. With `yes`, it saves without asking. The fit in the file is kept.
 pub fn confirm_save(
     term: &mut Terminal,
     loaded: &Loaded,
@@ -175,7 +174,7 @@ pub fn confirm_save(
         }
     }
     if yes || term.confirm(&format!("Save to {}?", file.path().display()), true)? {
-        file.save(&loaded.saved.with_profile(loaded.paper, after.clone()))?;
+        file.save(&loaded.saved.with_profile(after.clone()))?;
         writeln!(term.out, "Saved.")?;
     } else {
         writeln!(term.out, "Not saved.")?;

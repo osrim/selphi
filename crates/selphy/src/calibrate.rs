@@ -43,17 +43,14 @@ const LINE_COLOURS: [Rgb<u8>; 2] = [Rgb([0xC0, 0, 0]), Rgb([0, 0x60, 0xC0])];
 /// small labels stay crisp.
 const SHEET_QUALITY: u8 = 95;
 
-/// Draws the sheet for `paper` at its `profile`'s canvas, and writes it to
-/// `path` as a JPEG.
+/// Draws the sheet at `profile`'s canvas, and writes it to `path` as a JPEG.
 pub fn write_sheet(
-    paper: Paper,
     profile: &Profile,
     orientation: Orientation,
     font: &FontVec,
     path: &Path,
 ) -> Result<()> {
-    let jpeg =
-        imaging::encode_plain_jpeg(&sheet(paper, profile, orientation, font)?, SHEET_QUALITY)?;
+    let jpeg = imaging::encode_plain_jpeg(&sheet(profile, orientation, font)?, SHEET_QUALITY)?;
     atomic::write(path, jpeg)
 }
 
@@ -64,14 +61,9 @@ pub fn load_font(path: &Path) -> Result<FontVec> {
 }
 
 /// Draws the bracket sheet for `orientation`, at the profile's canvas size.
-/// The note names `paper`. Fails if the canvas is too small to hold a slot
-/// per candidate.
-fn sheet(
-    paper: Paper,
-    profile: &Profile,
-    orientation: Orientation,
-    font: &FontVec,
-) -> Result<RgbImage> {
+/// The note names the paper. Fails if the canvas is too small to hold a
+/// slot per candidate.
+fn sheet(profile: &Profile, orientation: Orientation, font: &FontVec) -> Result<RgbImage> {
     let canvas = Canvas::new(profile, orientation);
     let (w, h) = (canvas.width, canvas.height);
 
@@ -121,7 +113,7 @@ fn sheet(
         text_upward(&mut img, font, &label, w - d - inset, y1 - 4);
     }
 
-    for (i, note) in notes(paper, profile, orientation).iter().enumerate() {
+    for (i, note) in notes(profile, orientation).iter().enumerate() {
         let size = note_size(font, note, w);
         centred(
             &mut img,
@@ -135,10 +127,11 @@ fn sheet(
 }
 
 /// The lines of text in the middle of the sheet.
-fn notes(paper: Paper, profile: &Profile, orientation: Orientation) -> [String; 4] {
+fn notes(profile: &Profile, orientation: Orientation) -> [String; 4] {
     [
         format!(
-            "SELPHY trim bracket · {paper} · {:.1}x{:.1}mm @ {PPI}ppi · {}",
+            "SELPHY trim bracket · {} · {:.1}x{:.1}mm @ {PPI}ppi · {}",
+            Paper::Postcard,
             profile.canvas_long_mm,
             profile.canvas_short_mm,
             orientation.name()
@@ -241,7 +234,7 @@ mod tests {
         let profile = postcard();
         let font = arial();
         for orientation in [Orientation::Landscape, Orientation::Portrait] {
-            let img = sheet(Paper::Postcard, &profile, orientation, &font).unwrap();
+            let img = sheet(&profile, orientation, &font).unwrap();
             let (w, h) = (i64::from(img.width()), i64::from(img.height()));
             let (h_start, h_step) = slots(w);
             let (v_start, v_step) = slots(h);
@@ -268,7 +261,7 @@ mod tests {
     #[test]
     fn sheet_matches_the_canvas_and_has_labels() {
         let profile = postcard();
-        let img = sheet(Paper::Postcard, &profile, Orientation::Portrait, &arial()).unwrap();
+        let img = sheet(&profile, Orientation::Portrait, &arial()).unwrap();
         assert_eq!((img.width(), img.height()), (1181, 1772));
         let dark = img.pixels().filter(|p| p.0 == BLACK.0).count();
         assert!(dark > 1000, "labels are drawn ({dark} black pixels)");
@@ -282,21 +275,14 @@ mod tests {
             trim_short_b_mm: 1.0,
             ..postcard()
         };
-        let err = sheet(Paper::Postcard, &profile, Orientation::Landscape, &arial()).unwrap_err();
+        let err = sheet(&profile, Orientation::Landscape, &arial()).unwrap_err();
         assert!(format!("{err:#}").contains("too small"), "{err:#}");
     }
 
     #[test]
     fn write_sheet_writes_a_readable_jpeg() {
         let path = crate::test_util::fresh_dir("sheet").join("calibration.jpg");
-        write_sheet(
-            Paper::Postcard,
-            &postcard(),
-            Orientation::Landscape,
-            &arial(),
-            &path,
-        )
-        .unwrap();
+        write_sheet(&postcard(), Orientation::Landscape, &arial(), &path).unwrap();
         let written = image::open(&path).unwrap();
         assert_eq!((written.width(), written.height()), (1772, 1181));
     }
@@ -310,14 +296,14 @@ mod tests {
     }
 
     #[test]
-    fn a_card_sheet_is_drawn_at_the_card_canvas() {
-        let dir = crate::test_util::fresh_dir("sheet-card");
-        let card = Paper::Card.starting_profile();
+    fn a_sheet_is_written_at_the_canvas_size() {
+        let dir = crate::test_util::fresh_dir("sheet-written");
+        let profile = postcard();
         for orientation in Orientation::ALL {
             let path = dir.join(format!("{}.jpg", orientation.name()));
-            write_sheet(Paper::Card, &card, orientation, &arial(), &path).unwrap();
+            write_sheet(&profile, orientation, &arial(), &path).unwrap();
             let written = image::open(&path).unwrap();
-            let canvas = Canvas::new(&card, orientation);
+            let canvas = Canvas::new(&profile, orientation);
             assert_eq!(
                 (i64::from(written.width()), i64::from(written.height())),
                 (canvas.width, canvas.height)
@@ -326,23 +312,21 @@ mod tests {
     }
 
     #[test]
-    fn the_notes_fit_between_the_side_labels_on_every_paper() {
+    fn the_notes_fit_between_the_side_labels() {
         let font = arial();
-        let longest = notes(Paper::Postcard, &postcard(), Orientation::Portrait)
+        let profile = postcard();
+        let longest = notes(&profile, Orientation::Portrait)
             .into_iter()
             .max_by_key(|note| text_size(NOTE_PX, &font, note).0)
             .unwrap();
-        for paper in Paper::ALL {
-            let profile = paper.starting_profile();
-            for orientation in Orientation::ALL {
-                let w = Canvas::new(&profile, orientation).width;
-                let room = w - 2 * i64::from(NOTE_MARGIN_PX);
-                for note in notes(paper, &profile, orientation) {
-                    let size = note_size(&font, &note, w);
-                    let width = i64::from(text_size(size, &font, &note).0);
-                    assert!(width <= room, "{paper} {orientation:?}: {note}");
-                    assert!(size <= NOTE_PX);
-                }
+        for orientation in Orientation::ALL {
+            let w = Canvas::new(&profile, orientation).width;
+            let room = w - 2 * i64::from(NOTE_MARGIN_PX);
+            for note in notes(&profile, orientation) {
+                let size = note_size(&font, &note, w);
+                let width = i64::from(text_size(size, &font, &note).0);
+                assert!(width <= room, "{orientation:?}: {note}");
+                assert!(size <= NOTE_PX);
             }
         }
         // A wide canvas keeps the full size.

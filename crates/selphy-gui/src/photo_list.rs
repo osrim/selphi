@@ -8,18 +8,19 @@ use gpui_kit::component::{
     h_flex,
     menu::{ContextMenuExt as _, PopupMenuItem},
     spinner::Spinner,
+    tooltip::Tooltip,
     v_flex,
 };
 use gpui_kit::{
     AnyElement, Context, ExternalPaths, Hsla, InteractiveElement as _, IntoElement, MouseButton,
-    ObjectFit, ParentElement as _, Styled as _, StyledImage as _, Window, div, img,
-    prelude::FluentBuilder as _, uniform_list,
+    ObjectFit, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
+    StyledImage as _, Window, div, img, prelude::FluentBuilder as _, uniform_list,
 };
 
 use crate::AddPhotos;
 use crate::batch::{Photo, Status};
 use crate::main_window::MainWindow;
-use crate::text::{display_path, file_name};
+use crate::text::file_name;
 
 impl MainWindow {
     pub(crate) fn render_photo_list(
@@ -84,8 +85,13 @@ impl MainWindow {
         let shown = photo.shown_file().to_path_buf();
         let view = cx.weak_entity();
         let running = self.is_running();
+        let tooltip = match photo.status() {
+            Status::Failed(reason) => Some(SharedString::from(reason.clone())),
+            _ => None,
+        };
         h_flex()
             .id(("photo", id.key()))
+            .w_full()
             .gap_3()
             .px_3()
             .h_16()
@@ -101,6 +107,9 @@ impl MainWindow {
                 MouseButton::Right,
                 cx.listener(move |this, _, _, cx| this.select(id, cx)),
             )
+            .when_some(tooltip, |this, reason| {
+                this.tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx))
+            })
             .child(
                 div()
                     .flex()
@@ -119,20 +128,20 @@ impl MainWindow {
                         div()
                             .text_xs()
                             .text_color(detail_color)
-                            .line_clamp(2)
+                            .truncate()
                             .child(detail),
                     ),
             )
-            .when_some(icon, |this, icon| {
-                this.child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .size_5()
-                        .justify_center()
-                        .child(icon),
-                )
-            })
+            // The slot is kept when empty, so that every row lines up.
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .size_5()
+                    .items_center()
+                    .justify_center()
+                    .children(icon),
+            )
             .context_menu(move |menu, _, _| {
                 let shown = shown.clone();
                 let view = view.clone();
@@ -153,42 +162,28 @@ impl MainWindow {
     }
 }
 
-/// The status icon of a row, its detail line, and the detail's colour: the
-/// folder while waiting, the placement once prepared, or why it failed.
-fn status_parts(photo: &Photo, theme: &Theme) -> (Option<AnyElement>, String, Hsla) {
+/// The status icon of a row, its one-line status, and the status's colour.
+/// A failure's full reason is in the row's tooltip; the placement is under
+/// the preview.
+fn status_parts(photo: &Photo, theme: &Theme) -> (Option<AnyElement>, &'static str, Hsla) {
+    let icon = |name: IconName, color: Hsla| {
+        Some(Icon::new(name).small().text_color(color).into_any_element())
+    };
     match photo.status() {
-        Status::Waiting => (
-            None,
-            photo
-                .source()
-                .parent()
-                .map(display_path)
-                .unwrap_or_default(),
-            theme.muted_foreground,
-        ),
+        Status::Waiting => (None, "Not prepared", theme.muted_foreground),
         Status::Preparing => (
             Some(Spinner::new().small().into_any_element()),
-            "Preparing".to_string(),
+            "Preparing…",
             theme.muted_foreground,
         ),
-        Status::Prepared { summary, .. } => (
-            Some(
-                Icon::new(IconName::CircleCheck)
-                    .small()
-                    .text_color(theme.success)
-                    .into_any_element(),
-            ),
-            summary.clone(),
+        Status::Prepared { .. } => (
+            icon(IconName::CircleCheck, theme.success),
+            "Prepared",
             theme.muted_foreground,
         ),
-        Status::Failed(reason) => (
-            Some(
-                Icon::new(IconName::CircleX)
-                    .small()
-                    .text_color(theme.danger)
-                    .into_any_element(),
-            ),
-            reason.clone(),
+        Status::Failed(_) => (
+            icon(IconName::CircleX, theme.danger),
+            "Failed",
             theme.danger,
         ),
     }

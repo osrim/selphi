@@ -1,4 +1,4 @@
-//! The main window: a toolbar with Add, Paper, Fit and the output folder;
+//! The main window: a toolbar with Add, Clear, Fit and the output folder;
 //! the photo list next to the card preview; and a footer with the progress
 //! and Prepare. It owns the batch, the run and the caches.
 
@@ -8,41 +8,38 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonGroup, ButtonVariants as _},
     h_flex, h_resizable,
-    menu::{DropdownMenu as _, PopupMenuItem},
     notification::Notification,
     progress::Progress,
     resizable_panel, v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString, Styled as _,
-    Subscription, Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px,
+    IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use selphy::config::Profile;
 use selphy::geometry::Fit;
-use selphy::paper::Paper;
 use selphy::prepare::{self, Job, Options, Planned};
 
 use crate::batch::{Batch, PhotoId, Status};
 use crate::preview::{CardPreview, PreviewKey, Setup};
 use crate::run::{self, Run, Summary};
 use crate::state::{Prefs, ThemeChoice};
-use crate::text::{display_path, error_sentence, paper_label, summary_text};
+use crate::text::{display_path, error_sentence, summary_text};
 use crate::thumbnails::Thumbnails;
 use crate::{
-    AddPhotos, CancelPrepare, ChooseFolder, ClearPhotos, Prepare, Redo, RemoveSelected, SelectNext,
-    SelectPrevious, Undo,
+    AddPhotos, CancelPrepare, ChooseFolder, ClearPhotos, OpenSettings, Prepare, Redo,
+    RemoveSelected, SelectNext, SelectPrevious, Undo,
 };
 
-/// The paper and fit the window prepares with, read from the printer
-/// config.
+/// What the window prepares with: the fit, and the profile from the
+/// printer config.
 struct PrinterSetup {
     /// Goes up when `source` changes, so that a preview of an older setup
     /// is dropped.
     revision: u64,
     setup: Setup,
-    /// Whether each of `Paper::ALL` has a profile.
-    calibrated: [bool; 3],
     /// The settings revision and the profile the setup was made from. The
     /// profile also changes when the file or an override changes on disk.
     source: (u64, Option<Profile>),
@@ -76,7 +73,7 @@ impl MainWindow {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
         let printer = load_setup(prefs.read(cx));
-        Self {
+        let mut this = Self {
             prefs,
             batch: Batch::default(),
             run: None,
@@ -89,7 +86,10 @@ impl MainWindow {
             list_scroll: UniformListScrollHandle::new(),
             focus_handle,
             _subscriptions: vec![appearance, prefs_changed],
-        }
+        };
+        // Says at once when the config is broken, before any photo is added.
+        this.refresh_preview(cx);
+        this
     }
 
     /// Sets how many photos a run prepares at once.
@@ -316,7 +316,6 @@ impl MainWindow {
         self.reload_setup(cx);
         let job = match &self.printer.setup {
             Setup::Ready(job) => job.clone(),
-            Setup::NotCalibrated(_) => return cx.notify(),
             Setup::Broken(message) => {
                 let message = format!("{message} Fix it in Settings.");
                 show_error(
@@ -417,37 +416,9 @@ impl MainWindow {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let settings = self.prefs.read(cx).settings();
-        let (paper, fit) = (settings.paper, settings.fit);
+        let fit = settings.fit;
         let out_dir = display_path(&settings.out_dir);
         let running = self.is_running();
-        let calibrated = self.printer.calibrated;
-        let view = cx.weak_entity();
-        let paper_menu = Button::new("paper")
-            .small()
-            .outline()
-            .label(paper_label(paper))
-            .dropdown_caret(true)
-            .disabled(running)
-            .dropdown_menu(move |menu, _, _| {
-                let mut menu = menu;
-                for (ix, choice) in Paper::ALL.into_iter().enumerate() {
-                    let label = if calibrated[ix] {
-                        paper_label(choice).to_string()
-                    } else {
-                        format!("{} (not calibrated)", paper_label(choice))
-                    };
-                    let view = view.clone();
-                    menu = menu.item(PopupMenuItem::new(label).checked(choice == paper).on_click(
-                        move |_, window, cx| {
-                            view.update(cx, |this, cx| {
-                                this.change_settings(|s| s.paper = choice, window, cx)
-                            })
-                            .ok();
-                        },
-                    ));
-                }
-                menu
-            });
         let fits = ButtonGroup::new("fit")
             .small()
             .outline()
@@ -470,20 +441,29 @@ impl MainWindow {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                Button::new("add")
-                    .small()
-                    .icon(IconName::Plus)
-                    .label("Add…")
-                    .disabled(running)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.add_photos(&AddPhotos, window, cx)),
-                    ),
-            )
-            .child(
                 h_flex()
                     .gap_2()
-                    .child(div().text_sm().text_color(muted).child("Paper"))
-                    .child(paper_menu),
+                    .child(
+                        Button::new("add")
+                            .small()
+                            .icon(IconName::Plus)
+                            .label("Add…")
+                            .disabled(running)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.add_photos(&AddPhotos, window, cx)
+                            })),
+                    )
+                    .child(
+                        // No confirmation: Undo brings the photos back.
+                        Button::new("clear")
+                            .small()
+                            .ghost()
+                            .label("Clear")
+                            .disabled(running || self.batch.is_empty())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.clear(&ClearPhotos, window, cx)
+                            })),
+                    ),
             )
             .child(fits)
             .child(
@@ -509,8 +489,8 @@ impl MainWindow {
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let status: SharedString = match (&self.run, &self.summary, &self.printer.setup) {
-            (Some(run), _, _) => {
+        let status: SharedString = match (&self.run, &self.summary) {
+            (Some(run), _) => {
                 let (done, total) = run.progress();
                 if run.is_cancelled() {
                     format!("Cancelling… {done} of {total}").into()
@@ -518,10 +498,7 @@ impl MainWindow {
                     format!("{done} of {total}").into()
                 }
             }
-            (None, Some(summary), _) => summary_text(summary).into(),
-            (None, None, Setup::NotCalibrated(paper)) if !self.batch.is_empty() => {
-                format!("Calibrate {} paper to prepare.", paper_label(*paper)).into()
-            }
+            (None, Some(summary)) => summary_text(summary).into(),
             _ => SharedString::default(),
         };
         let progress = self.run.as_ref().map(|run| {
@@ -554,6 +531,14 @@ impl MainWindow {
             .py_3()
             .border_t_1()
             .border_color(theme.border)
+            .child(
+                Button::new("settings")
+                    .ghost()
+                    .icon(IconName::Settings)
+                    .accessibility_label("Settings")
+                    .tooltip_with_action("Settings", &OpenSettings, None)
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
+            )
             .when_some(progress, |this, value| {
                 this.child(
                     div().w(px(160.)).child(
@@ -566,6 +551,9 @@ impl MainWindow {
             .child(
                 div()
                     .id("run-status")
+                    // Read out as it changes, as the run goes.
+                    .role(gpui_kit::Role::Status)
+                    .aria_label(status.clone())
                     .flex_1()
                     .min_w_0()
                     .text_sm()
@@ -644,49 +632,36 @@ impl Render for MainWindow {
     }
 }
 
-/// The setup for the settings' paper and fit, from the printer config as it
-/// is on disk now, with the env overrides. Its revision is 0; the main
+/// The setup for the settings' fit, from the printer config as it is on
+/// disk now, with the env overrides. Its revision is 0; the main
 /// window numbers the setups it loads.
 fn load_setup(prefs: &Prefs) -> PrinterSetup {
     let settings = prefs.settings();
     let revision = 0;
-    let loaded = match prefs
-        .config()
-        .load(Some(settings.paper), Some(settings.fit))
-    {
+    let loaded = match prefs.config().load(Some(settings.fit)) {
         Ok(loaded) => loaded,
         Err(err) => {
             return PrinterSetup {
                 revision,
                 setup: Setup::Broken(error_sentence(&err)),
-                calibrated: [true; 3],
                 source: (prefs.revision(), None),
             };
         }
     };
-    let calibrated = Paper::ALL.map(|paper| loaded.saved.profile(paper).is_some());
-    let profile = loaded.profile().ok();
-    let setup = if loaded.saved.profile(settings.paper).is_none() {
-        Setup::NotCalibrated(settings.paper)
-    } else {
-        let opts = Options {
-            out_dir: settings.out_dir.clone(),
-            archive_dir: None,
-            camera_ref: None,
-            fit: settings.fit,
-        };
-        match loaded
-            .profile()
-            .and_then(|profile| Job::new(settings.paper, profile, opts))
-        {
-            Ok(job) => Setup::Ready(job),
-            Err(err) => Setup::Broken(error_sentence(&err)),
-        }
+    let opts = Options {
+        out_dir: settings.out_dir.clone(),
+        archive_dir: None,
+        camera_ref: None,
+        fit: settings.fit,
     };
+    let setup = match loaded.profile().and_then(|profile| Job::new(profile, opts)) {
+        Ok(job) => Setup::Ready(job),
+        Err(err) => Setup::Broken(error_sentence(&err)),
+    };
+    let profile = loaded.profile().ok();
     PrinterSetup {
         revision,
         setup,
-        calibrated,
         source: (prefs.revision(), profile),
     }
 }

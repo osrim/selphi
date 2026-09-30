@@ -27,21 +27,13 @@ ImageMagick and exiftool are not needed.
 ## Commands
 
 ```
-selphy [--config <FILE>] [--paper postcard|l|card] <command>
+selphy [--config <FILE>] <command>
 ```
 
-`--config` names the printer config file for any command. `--paper` names the
-paper: `prepare` and `config` use that paper's profile, and `calibrate`
-measures it. The default is the config's `paper`, else postcard. Both options
-can go before or after the command. See [Configuration](#configuration).
-
-```sh
-selphy prepare --paper l trip/       # prepare for L paper
-```
-
-Postcard works with no config. L and card must be calibrated once with
-`selphy calibrate --paper <paper>`; until then, `prepare` stops with an error
-that names that command.
+selphy prepares for postcard paper (100 x 148 mm). `--config` names the
+printer config file for any command, before or after the command. See
+[Configuration](#configuration). It works with no config, with the values
+measured on a SELPHY CP1500.
 
 ### `selphy prepare`
 
@@ -85,8 +77,8 @@ For each photo, `prepare`:
    not white. The side that overflows is squeezed by up to 2.5%, to cut as
    little as possible. The photo is centred, so both ends of the long side
    lose the same amount.
-4. Sharpens, and writes a 300 dpi baseline JPEG at the paper's canvas size
-   (150x100 mm for postcard), with 4:2:0 chroma, to `out/<name>-selphy.jpg`. Only the last extension is replaced:
+4. Sharpens, and writes a 300 dpi baseline JPEG at the canvas size
+   (150x100 mm), with 4:2:0 chroma, to `out/<name>-selphy.jpg`. Only the last extension is replaced:
    `photo.v2.png` becomes `photo.v2-selphy.jpg`.
 5. Moves the source to the archive folder. An existing file is never
    replaced: `photo.jpg` becomes `photo-2.jpg`, then `photo-3.jpg`.
@@ -132,26 +124,32 @@ Dry run: nothing written.
 ### `selphy-gui`
 
 A window for `prepare`. Drop photos or folders on the photo list, or use
-Add…. Select a photo to see its card as it will print, with the trim zone
-hatched and the placement under it. The preview uses the same code as
-Prepare. Choose the paper and the fit in the toolbar, and the output folder
+Add…. Select a photo to see its card as it will print, inside a dashed line at
+the paper's edge. The picture that the printer cuts off is shown dimmed
+around it, and the placement is under it. The preview uses the same code as
+Prepare. Choose the fit in the toolbar, and the output folder
 (`~/Pictures/SELPHY` at first). Prepare prepares the photos in parallel and
-shows the progress; each row shows its result or its error. Cancel stops the
-run after the photos in progress. Sources are not moved, and no camera
-reference is used. An uncalibrated paper cannot be prepared for.
+shows the progress; each row shows its status, and a failed row's tooltip
+says why. Cancel stops the run after the photos in progress. Sources are not
+moved, and no camera reference is used.
 
-Remove and Clear can be undone. The window remembers the paper, the fit, the
-output folder and the theme in `gui.toml` next to the printer config. The
+Remove and Clear can be undone. The window remembers the fit, the output
+folder and the theme in `gui.toml` next to the printer config. The
 command line does not read this file.
 
-Settings… (Cmd-,) opens the Settings window:
+Settings… (Cmd-,), or the gear button at the bottom left, opens the Settings
+window:
 
-- Printer: one paper's four trims, canvas and max stretch. Save writes them
-  to that paper's table of the config file that the command line reads, and
-  makes that paper the window's paper. The other tables are kept. Save
-  Calibration Sheet… writes the paper's sheet. Restore Defaults puts the
-  paper's starting values in the fields; nothing is written until Save.
-- Appearance: the theme, System, Light or Dark.
+- Printer: the four trims, the canvas and the max stretch, as the config file
+  that the command line reads holds them. Save Calibration Sheet… writes the
+  sheet for these values.
+- Appearance: the theme, System, Light or Dark. A choice shows at once.
+
+Save (Cmd-S) checks the values, writes the config file and `gui.toml`, and
+closes the window. An invalid value keeps it open, with the error next to the
+field. Cancel (Escape), or closing the window, writes nothing and puts the
+previous theme back. Restore Defaults puts the built-in values in the fields
+and the theme back to System; nothing is written until Save.
 
 | Key | Command |
 |---|---|
@@ -163,14 +161,13 @@ Settings… (Cmd-,) opens the Settings window:
 | Delete, Backspace | Remove the selected photo |
 | Cmd-Z, Cmd-Shift-Z | Undo, Redo |
 | Cmd-, | Settings |
+| Cmd-S, Escape | Save or Cancel in Settings |
 
 ### `selphy config`
 
-Shows the config file, the paper and the papers that are calibrated, the fit,
-and for the paper: the canvas, the trim on each edge in both orientations, and
-how common photo shapes land on the card with the fit. `selphy config --paper l`
-shows the L profile; an uncalibrated paper is an error. `selphy config --fit
-cover` shows how the shapes land with the Fill card fit. The values are the
+Shows the config file, the fit, the canvas, the trim on each edge in both
+orientations, and how common photo shapes land on the card with the fit.
+`selphy config --fit cover` shows how the shapes land with the Fill card fit. The values are the
 ones this run uses:
 when env vars override values, an `Env` line under the header lists them, and
 each overridden value is marked with `(from SELPHY_…)`. In the trim
@@ -179,7 +176,6 @@ table, the mark also names the column, as in `(portrait from SELPHY_…)`.
 ```
 $ selphy config
 Config  ~/.config/selphy/printer.toml  (not found: using defaults)
-Paper   postcard (calibrated: postcard)
 Fit     contain (Whole photo)
 Canvas  150 x 100 mm, stretch up to 2.5%
 
@@ -199,14 +195,14 @@ How a photo lands
 | Option | Meaning |
 |---|---|
 | `--path` | Print only the config file's path. |
-| `--init` | Write the paper's values to the config file, for editing by hand. Env overrides are not written. Fails if the file exists. |
+| `--init` | Write the values to the config file, for editing by hand. Env overrides are not written. Fails if the file exists. |
 | `--fit <contain\|cover>` | Show the photo shapes with this fit. Default: the config's `fit`, else `contain`. Also read from `$SELPHY_FIT`. |
 
 ### `selphy calibrate`
 
-Measures the printer's trim on one paper. It writes a bracket sheet at the
-paper's canvas: on each edge, nine lines at 1.5 to 5.5 mm from the edge, each
-labelled with its distance. The sheet names the paper. Print the sheet
+Measures the printer's trim. It writes a bracket sheet at the canvas: on
+each edge, nine lines at 1.5 to 5.5 mm from the edge, each labelled with its
+distance. Print the sheet
 Borderless and tear the tabs. On each edge, the smallest number whose line
 still shows is the trim on that edge.
 
@@ -214,13 +210,8 @@ still shows is the trim on that edge.
 selphy calibrate                          # write the sheet, then enter the readings
 selphy calibrate --sheet-only             # only write calibration-landscape.jpg
 selphy calibrate --read                   # enter readings from a sheet printed earlier
-selphy calibrate --paper card             # measure card paper
 selphy calibrate --read --left 2.5 --top 2.0 --right 5.5 --bottom 3.0 --yes
 ```
-
-The readings are saved to the paper's table. The other papers' tables stay
-as they are. A paper that has no table starts from a canvas the size of the
-paper, with no trims.
 
 For each edge, `calibrate` asks for the smallest visible number. The cursor
 starts at the current trim. "no line visible" means the trim is more than
@@ -230,7 +221,7 @@ confirm.
 
 | Option | Meaning |
 |---|---|
-| `--orientation <landscape\|portrait>` | The orientation of the sheet. Either one measures all four trims. Default: `landscape`. Use the same value, and the same `--paper`, with `--read`. |
+| `--orientation <landscape\|portrait>` | The orientation of the sheet. Either one measures all four trims. Default: `landscape`. Use the same value with `--read`. |
 | `--sheet-only` | Only write the sheet. |
 | `--read` | Do not write the sheet; ask for the readings. |
 | `-o, --out <FILE>` | Where to write the sheet. Default: `calibration-<orientation>.jpg`. |
@@ -262,15 +253,12 @@ orientation it was printed. For each edge, `adjust` asks for a number in mm:
 The new trim on each edge is the recorded margin minus the number entered, so
 edges with planned white, such as the top and bottom of a 16:9 photo, give
 correct results too. `adjust` then shows the trims before and after, and saves
-them to the profile of the paper the file was prepared for when you confirm.
-`--paper` and `$SELPHY_PAPER` are ignored, with a warning on stderr when they
-name another paper.
-It stops with an error when a trim would be below 0 or more than half the
+them to the config file when you confirm. It stops with an error when a trim would be below 0 or more than half the
 canvas side.
 
 The file must hold a placement record, which only `selphy prepare` writes.
 `adjust` refuses a file made by an older selphy, and a file whose canvas
-differs from the paper's current canvas: prepare and print it again. It also
+differs from the current canvas: prepare and print it again. It also
 refuses a Fill card print, because its margins do not show the trim: prepare
 the photo with `--fit contain` to measure it.
 
@@ -314,21 +302,18 @@ terminal" hint, override warnings and `error: …`.
 ## Configuration
 
 Each value is resolved in this order: command line, then env, then the config
-file, then the defaults. On the command line, `--config` chooses the file,
-`--paper` the paper and `--fit` the fit; env vars set single values.
+file, then the defaults. On the command line, `--config` chooses the file and
+`--fit` the fit; env vars set single values.
 
 The config file is `~/.config/selphy/printer.toml`. `$XDG_CONFIG_HOME` moves
 it. `--config <FILE>` names the file directly, and so does `$SELPHY_CONFIG`;
 the flag wins over the env var.
 
-The file holds the default paper, the default fit and one table per
-calibrated paper:
-`[postcard]`, `[l]` and `[card]`. Each table is a profile: the canvas, the
-four trims and the max stretch. Without a file, postcard uses the defaults
-below, and L and card are not calibrated.
+The file holds the default fit and the `[postcard]` table: the canvas, the
+four trims and the max stretch. Without a file, selphy uses the defaults
+below.
 
 ```toml
-paper = "postcard"       # the default paper: postcard, l or card
 fit = "contain"          # the default fit: contain or cover
 
 [postcard]
@@ -341,33 +326,27 @@ trim_short_b_mm = 2.7    # bottom
 max_stretch_pct = 2.5    # largest one-axis stretch
 ```
 
-The paper is resolved as `--paper`, then `$SELPHY_PAPER`, then `paper` in the
-file, then postcard. The fit is resolved as `--fit`, then `$SELPHY_FIT`, then
-`fit` in the file, then contain. Keys left out of a `[postcard]` table take the defaults
-above. An `[l]` or `[card]` table must have all four trims, because those
-papers have no built-in trims; a canvas or stretch left out takes the size of
-the paper (L 119 x 89 mm, card 86 x 54 mm) or 2.5 %. Unknown keys are an
-error. So is a file with the profile keys at the top
+The fit is resolved as `--fit`, then `$SELPHY_FIT`, then `fit` in the file,
+then contain. Keys left out of the `[postcard]` table take the defaults above.
+Unknown keys and tables are an error. So is a file with the profile keys at the top
 level, as older versions wrote it: move them into a `[postcard]` table. So
 are values that leave nothing to print on: a canvas side of 0 or less, a
 negative trim or stretch, or two trims that together cover a canvas side.
-The error names the table, as in `[l] trim_long_a_mm = -1: must be 0 or
-more`.
+The error names the table, as in `[postcard] trim_long_a_mm = -1: must be 0
+or more`.
 
 The trims are named for the landscape canvas. The printer rotates a portrait
 photo so that its top lands on long A and its left on short B; `selphy config`
 shows the result for both orientations.
 
-Each profile value has an env var that overrides it for one run, in the
-profile of the paper this run uses, for example
-`SELPHY_MAX_STRETCH_PCT=0 selphy prepare --paper l`. An override is never
+Each profile value has an env var that overrides it for one run, for example
+`SELPHY_MAX_STRETCH_PCT=0 selphy prepare`. An override is never
 written to the file. An empty value counts as not set. A value that is not a number is
 an error that names the var, and so is an override that leaves nothing to
 print on.
 
 | Env var | Overrides |
 |---|---|
-| `SELPHY_PAPER` | `paper` |
 | `SELPHY_FIT` | `fit` |
 | `SELPHY_CANVAS_LONG_MM` | `canvas_long_mm` |
 | `SELPHY_CANVAS_SHORT_MM` | `canvas_short_mm` |
@@ -378,8 +357,8 @@ print on.
 | `SELPHY_MAX_STRETCH_PCT` | `max_stretch_pct` |
 
 `selphy-gui` uses the same file (`$SELPHY_CONFIG` if set) and the same
-overrides when it prepares photos. It uses its own paper and fit, from its
-toolbar. Its Printer pane shows and saves the file's values, without the
+overrides when it prepares photos. It uses its own fit, from its toolbar.
+Its Settings window shows and saves the file's values, without the
 overrides, and names the overrides that are set.
 
 To edit the values: run `selphy config --init`, then open the file with

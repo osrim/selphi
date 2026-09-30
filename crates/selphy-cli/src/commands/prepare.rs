@@ -16,7 +16,6 @@ use indicatif::ProgressBar;
 
 use selphy::config::{ConfigFile, FIT_ENV};
 use selphy::geometry::{Fit, Placement};
-use selphy::paper::Paper;
 use selphy::prepare::{self, Done, Dry, Job, Options, Planned};
 use selphy::report::{photo_error, placement_summary};
 
@@ -63,19 +62,14 @@ pub struct PrepareArgs {
     dry_run: bool,
 }
 
-/// Prepares the photos for the paper, reporting each on stdout and each
-/// failure on stderr, in input order. Exits with failure when any photo
-/// failed. An uncalibrated paper, and two sources that would write one
-/// output, are errors before any photo is read.
+/// Prepares the photos, reporting each on stdout and each failure on
+/// stderr, in input order. Exits with failure when any photo failed. Two
+/// sources that would write one output are an error before any photo is
+/// read.
 ///
 /// A dry run reads only each photo's header, and reports what a real run
 /// would do.
-pub fn run(
-    args: PrepareArgs,
-    term: &mut Terminal,
-    file: &ConfigFile,
-    paper: Option<Paper>,
-) -> Result<ExitCode> {
+pub fn run(args: PrepareArgs, term: &mut Terminal, file: &ConfigFile) -> Result<ExitCode> {
     // With no paths, work the default folders: src/ -> out/, archived to
     // originals/. Named paths are only archived when asked.
     let reading_src = args.paths.is_empty();
@@ -90,7 +84,7 @@ pub fn run(
         (false, None) => reading_src.then(|| PathBuf::from("originals")),
     };
 
-    let loaded = file.load(paper, args.fit)?;
+    let loaded = file.load(args.fit)?;
     let profile = loaded.profile()?;
     let inputs = prepare::collect_inputs(&paths)?;
     if inputs.is_empty() {
@@ -100,7 +94,6 @@ pub fn run(
     let planned = prepare::plan(&inputs, &args.out)?;
 
     let job = Job::new(
-        loaded.paper,
         profile,
         Options {
             out_dir: args.out,
@@ -316,7 +309,7 @@ mod tests {
             jobs: NonZeroUsize::new(jobs),
             ..args(vec![src], &dir)
         };
-        let code = run(args, &mut term, &file, None).unwrap();
+        let code = run(args, &mut term, &file).unwrap();
         (
             code,
             written.out().replace(&dir.display().to_string(), "DIR"),
@@ -354,7 +347,7 @@ mod tests {
             ..args(vec![src.clone()], &dir)
         };
 
-        let code = run(args, &mut term, &file, None).unwrap();
+        let code = run(args, &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::FAILURE);
         assert!(written.out().contains("5 prepared → "), "{}", written.out());
@@ -377,7 +370,7 @@ mod tests {
         let (mut term, written) = Terminal::scripted([]);
         let file = ConfigFile::at(dir.join("printer.toml"));
 
-        let err = run(args(vec![dir.clone()], &dir), &mut term, &file, None).unwrap_err();
+        let err = run(args(vec![dir.clone()], &dir), &mut term, &file).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -407,7 +400,7 @@ mod tests {
             ..args(vec![src.clone()], &dir)
         };
 
-        let code = run(dry, &mut term, &file, None).unwrap();
+        let code = run(dry, &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::FAILURE);
         let (out, err) = (written.out(), written.err());
@@ -432,7 +425,7 @@ mod tests {
         assert!(photo.exists());
 
         let (mut term, written) = Terminal::scripted([]);
-        run(args(vec![photo.clone()], &dir), &mut term, &file, None).unwrap();
+        run(args(vec![photo.clone()], &dir), &mut term, &file).unwrap();
         let real = written.out();
         assert!(
             real.starts_with(&format!("✓ {}  {placement}\n", photo.display())),
@@ -450,7 +443,7 @@ mod tests {
         let (mut term, written) = Terminal::scripted([]);
         let file = ConfigFile::at(dir.join("printer.toml"));
 
-        let code = run(args(vec![src.clone()], &dir), &mut term, &file, None).unwrap();
+        let code = run(args(vec![src.clone()], &dir), &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::FAILURE);
         let (out, err) = (written.out(), written.err());
@@ -475,7 +468,7 @@ mod tests {
         let (mut term, written) = Terminal::scripted([]);
         let file = ConfigFile::at(dir.join("printer.toml"));
 
-        let code = run(args(vec![dir.clone()], &dir), &mut term, &file, None).unwrap();
+        let code = run(args(vec![dir.clone()], &dir), &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         assert_eq!(written.out(), "");
@@ -490,7 +483,7 @@ mod tests {
         let file = ConfigFile::at(dir.join("printer.toml"))
             .with_overrides([("SELPHY_MAX_STRETCH_PCT", "0")]);
 
-        let code = run(args(vec![photo], &dir), &mut term, &file, None).unwrap();
+        let code = run(args(vec![photo], &dir), &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         assert!(
@@ -511,7 +504,7 @@ mod tests {
             ..args(vec![photo], &dir)
         };
 
-        let code = run(args, &mut term, &file, None).unwrap();
+        let code = run(args, &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         let out = written.out();
@@ -530,32 +523,8 @@ mod tests {
         let file = ConfigFile::at(dir.join("printer.toml"));
         fs::write(file.path(), "fit = \"cover\"\n").unwrap();
 
-        run(args(vec![photo], &dir), &mut term, &file, None).unwrap();
+        run(args(vec![photo], &dir), &mut term, &file).unwrap();
 
         assert!(written.out().contains("cut left "), "{}", written.out());
-    }
-
-    #[test]
-    fn an_uncalibrated_paper_fails_with_the_calibrate_hint() {
-        let dir = fresh_dir("cli-prepare-uncalibrated");
-        let photo = write_jpeg(&dir.join("a.jpg"), 300, 200, &[]);
-        let (mut term, written) = Terminal::scripted([]);
-        let file = ConfigFile::at(dir.join("printer.toml"));
-
-        let err = run(
-            args(vec![photo.clone()], &dir),
-            &mut term,
-            &file,
-            Some(Paper::L),
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            err.to_string(),
-            "l paper is not calibrated. Run: selphy calibrate --paper l"
-        );
-        assert_eq!(written.out(), "");
-        assert!(photo.exists(), "the source is not archived");
-        assert!(!dir.join("out").exists());
     }
 }

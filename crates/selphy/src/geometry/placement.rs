@@ -294,9 +294,15 @@ mod tests {
 
     #[test]
     fn cover_bleeds_to_the_canvas_edge_where_the_trim_is_smaller() {
-        // L starts with no trims: the safe box is the canvas, so there is
-        // no bleed and nothing past the canvas on the axis that fits.
-        let profile = crate::paper::Paper::L.starting_profile();
+        // With no trims the safe box is the canvas, so there is no bleed
+        // and nothing past the canvas on the axis that fits.
+        let profile = Profile {
+            trim_long_a_mm: 0.0,
+            trim_long_b_mm: 0.0,
+            trim_short_a_mm: 0.0,
+            trim_short_b_mm: 0.0,
+            ..crate::test_util::postcard()
+        };
         let p = place(&profile, 1920, 1080, Fit::Cover).unwrap();
         assert_eq!((p.y, p.height), (0, p.canvas.height));
         assert!(p.x < 0, "{}", p.x);

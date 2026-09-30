@@ -12,7 +12,6 @@ use clap::{ArgGroup, Args, ValueEnum};
 use selphy::calibrate::{self, CANDIDATES_MM};
 use selphy::config::{ConfigFile, Profile};
 use selphy::geometry::{Edge, Fit, Orientation, Trim};
-use selphy::paper::Paper;
 
 use crate::commands::EdgeArgs;
 use crate::terminal::{Change, Terminal, confirm_save, print_changes};
@@ -65,30 +64,20 @@ impl From<SheetOrientation> for Orientation {
     }
 }
 
-/// Writes the paper's bracket sheet, then asks for the readings and offers
-/// to save the trims to the paper's table, as the flags select. The other
-/// papers' tables are kept. Readings given as edge flags are not asked for,
-/// and each must be a line on the sheet; `--yes` saves without asking.
+/// Writes the bracket sheet, then asks for the readings and offers to save
+/// the trims, as the flags select. Readings given as edge flags are not
+/// asked for, and each must be a line on the sheet; `--yes` saves without
+/// asking.
 ///
-/// The paper's profile is its table, else its starting profile. The sheet
-/// uses that profile with the overrides applied, as this run uses it; the
-/// readings are applied to it without them.
-pub fn run(
-    args: CalibrateArgs,
-    term: &mut Terminal,
-    file: &ConfigFile,
-    paper: Option<Paper>,
-) -> Result<ExitCode> {
+/// The sheet uses the file's profile with the overrides applied, as this
+/// run uses it; the readings are applied to it without them.
+pub fn run(args: CalibrateArgs, term: &mut Terminal, file: &ConfigFile) -> Result<ExitCode> {
     let orientation = Orientation::from(args.orientation);
     // Sheets have no picture, so the fit is not read.
-    let loaded = file.load(paper, Some(Fit::Contain))?;
-    let paper = loaded.paper;
-    let before = loaded
-        .saved
-        .profile(paper)
-        .unwrap_or_else(|| paper.starting_profile());
+    let loaded = file.load(Some(Fit::Contain))?;
+    let before = loaded.saved_profile();
     let later = format!(
-        "selphy calibrate --read --paper {paper} --orientation {}",
+        "selphy calibrate --read --orientation {}",
         orientation.name()
     );
 
@@ -98,8 +87,8 @@ pub fn run(
             .unwrap_or_else(|| PathBuf::from(format!("calibration-{}.jpg", orientation.name())));
         let font = calibrate::load_font(&args.font)?;
         let sheet = loaded.apply_overrides(before.clone())?;
-        calibrate::write_sheet(paper, &sheet, orientation, &font, &out)?;
-        writeln!(term.out, "Wrote {} for {paper} paper", out.display())?;
+        calibrate::write_sheet(&sheet, orientation, &font, &out)?;
+        writeln!(term.out, "Wrote {}", out.display())?;
         writeln!(
             term.out,
             "Print it Borderless and tear the tabs. On each edge, find the"
@@ -269,18 +258,12 @@ mod tests {
         let file = ConfigFile::at(fresh_dir("cli-calibrate-flags").join("printer.toml"));
         let (mut term, written) = Terminal::scripted([]);
 
-        let code = run(
-            flag_args(Some(3.0), Some(2.5), true),
-            &mut term,
-            &file,
-            None,
-        )
-        .unwrap();
+        let code = run(flag_args(Some(3.0), Some(2.5), true), &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         assert!(written.out().ends_with("Saved.\n"), "{}", written.out());
-        let saved = file.load(None, None).unwrap().saved_profile().unwrap();
-        let start = Paper::Postcard.starting_profile();
+        let saved = file.load(None).unwrap().saved_profile();
+        let start = selphy::paper::Paper::Postcard.default_profile();
         // landscape left = long A, top = short A
         assert_eq!(saved.trim_long_a_mm, 3.0);
         assert_eq!(saved.trim_short_a_mm, 2.5);
@@ -292,7 +275,7 @@ mod tests {
     fn a_reading_that_is_not_a_line_fails_and_lists_the_lines() {
         let file = ConfigFile::at(fresh_dir("cli-calibrate-typo").join("printer.toml"));
         let (mut term, _) = Terminal::scripted([]);
-        let err = run(flag_args(Some(2.2), None, true), &mut term, &file, None).unwrap_err();
+        let err = run(flag_args(Some(2.2), None, true), &mut term, &file).unwrap_err();
         assert_eq!(
             err.to_string(),
             "2.2 mm is not a line on the sheet; use one of 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, \
@@ -305,7 +288,7 @@ mod tests {
     fn flags_without_yes_ask_to_save() {
         let file = ConfigFile::at(fresh_dir("cli-calibrate-flags-ask").join("printer.toml"));
         let (mut term, written) = Terminal::scripted([Answer::Confirm(false)]);
-        run(flag_args(Some(3.0), None, false), &mut term, &file, None).unwrap();
+        run(flag_args(Some(3.0), None, false), &mut term, &file).unwrap();
         assert!(written.out().ends_with("Not saved.\n"), "{}", written.out());
     }
 
@@ -317,7 +300,7 @@ mod tests {
             let file = ConfigFile::at(fresh_dir("cli-calibrate-no-tty").join("printer.toml"));
             let (mut term, _) = Terminal::scripted([]);
             term.is_interactive = false;
-            let err = run(case, &mut term, &file, None).unwrap_err();
+            let err = run(case, &mut term, &file).unwrap_err();
             assert_eq!(err.to_string(), hint);
             assert!(!file.exists().unwrap());
         }
@@ -339,7 +322,7 @@ mod tests {
             Answer::Confirm(true),
         ];
         let (mut term, written) = Terminal::scripted(answers);
-        let code = run(read_args(), &mut term, &file, None).unwrap();
+        let code = run(read_args(), &mut term, &file).unwrap();
         assert_eq!(code, ExitCode::SUCCESS);
         let out = written.out();
         assert!(
@@ -348,14 +331,7 @@ mod tests {
         );
         assert!(out.contains("  top                 2.10   2.10\n"), "{out}");
         assert!(out.ends_with("Saved.\n"), "{out}");
-        assert_eq!(
-            file.load(None, None)
-                .unwrap()
-                .saved_profile()
-                .unwrap()
-                .trim_long_a_mm,
-            3.0
-        );
+        assert_eq!(file.load(None).unwrap().saved_profile().trim_long_a_mm, 3.0);
     }
 
     #[test]
@@ -370,7 +346,7 @@ mod tests {
         ];
         let (mut term, written) = Terminal::scripted(answers);
         assert_eq!(
-            run(read_args(), &mut term, &file, None).unwrap(),
+            run(read_args(), &mut term, &file).unwrap(),
             ExitCode::SUCCESS
         );
         assert!(written.out().ends_with("Not saved.\n"), "{}", written.out());
@@ -381,7 +357,7 @@ mod tests {
     fn a_cancel_is_a_cancelled_error_and_saves_nothing() {
         let file = ConfigFile::at(fresh_dir("cli-calibrate-cancel").join("printer.toml"));
         let (mut term, _) = Terminal::scripted([line(3.0), Answer::Cancel]);
-        let err = run(read_args(), &mut term, &file, None).unwrap_err();
+        let err = run(read_args(), &mut term, &file).unwrap_err();
         assert!(err.is::<Cancelled>(), "{err:#}");
         assert!(!file.exists().unwrap());
     }
@@ -391,7 +367,7 @@ mod tests {
         let file = ConfigFile::at(fresh_dir("cli-calibrate-skip").join("printer.toml"));
         let (mut term, written) = Terminal::scripted([Answer::Select(SKIP); 4]);
         assert_eq!(
-            run(read_args(), &mut term, &file, None).unwrap(),
+            run(read_args(), &mut term, &file).unwrap(),
             ExitCode::SUCCESS
         );
         assert_eq!(written.out(), "No readings; nothing changed.\n");
@@ -413,7 +389,7 @@ mod tests {
             Answer::Confirm(true),
         ];
         let (mut term, written) = Terminal::scripted(answers);
-        run(read_args(), &mut term, &file, None).unwrap();
+        run(read_args(), &mut term, &file).unwrap();
         // Only long A is saved; short A keeps its file value.
         assert_eq!(
             written.err(),
@@ -431,50 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn read_for_l_writes_the_l_table_and_keeps_postcard() {
-        let file = ConfigFile::at(fresh_dir("cli-calibrate-l").join("printer.toml"));
-        let postcard = Profile {
-            trim_long_a_mm: 4.0,
-            ..Paper::Postcard.starting_profile()
-        };
-        let before = selphy::config::Config::default().with_profile(Paper::Postcard, postcard);
-        file.save(&before).unwrap();
-        let answers = [
-            line(3.0),
-            line(2.0),
-            line(3.5),
-            line(1.5),
-            Answer::Confirm(true),
-        ];
-        let (mut term, written) = Terminal::scripted(answers);
-
-        run(read_args(), &mut term, &file, Some(Paper::L)).unwrap();
-
-        // The L profile starts with no trims.
-        assert!(
-            written
-                .out()
-                .contains("  left                0.00   3.00  *\n"),
-            "{}",
-            written.out()
-        );
-        let saved = file.load(None, None).unwrap().saved;
-        assert_eq!(saved.postcard, before.postcard);
-        assert_eq!(
-            saved.l,
-            Some(Profile {
-                trim_long_a_mm: 3.0,
-                trim_short_a_mm: 2.0,
-                trim_long_b_mm: 3.5,
-                trim_short_b_mm: 1.5,
-                ..Paper::L.starting_profile()
-            })
-        );
-        assert_eq!(saved.card, None);
-    }
-
-    #[test]
-    fn the_sheet_is_drawn_at_the_papers_canvas_and_names_it() {
+    fn sheet_only_writes_the_sheet_at_the_canvas_and_saves_nothing() {
         let dir = fresh_dir("cli-calibrate-sheet");
         let file = ConfigFile::at(dir.join("printer.toml"));
         let out = dir.join("sheet.jpg");
@@ -485,17 +418,17 @@ mod tests {
             ..read_args()
         };
         let (mut term, written) = Terminal::scripted([]);
-        run(args, &mut term, &file, Some(Paper::Card)).unwrap();
+        run(args, &mut term, &file).unwrap();
         assert!(
             written
                 .out()
-                .starts_with(&format!("Wrote {} for card paper\n", out.display())),
+                .starts_with(&format!("Wrote {}\n", out.display())),
             "{}",
             written.out()
         );
         let sheet = selphy::imaging::load(&out).unwrap().image;
-        // 86 x 54 mm at 300 ppi.
-        assert_eq!((sheet.width(), sheet.height()), (1016, 638));
+        // 150 x 100 mm at 300 ppi.
+        assert_eq!((sheet.width(), sheet.height()), (1772, 1181));
         assert!(!file.exists().unwrap());
     }
 }

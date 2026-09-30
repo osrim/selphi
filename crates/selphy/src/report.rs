@@ -143,7 +143,6 @@ mod tests {
         let bad = dir.join("broken.jpg");
         fs::write(&bad, b"not a jpeg").unwrap();
         let job = Job::new(
-            crate::paper::Paper::Postcard,
             postcard(),
             Options {
                 out_dir: dir.join("out"),

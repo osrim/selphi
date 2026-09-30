@@ -9,7 +9,6 @@ use gpui_kit::App;
 use gpui_kit::component::{Theme, ThemeMode};
 use selphy::config::ConfigFile;
 use selphy::geometry::Fit;
-use selphy::paper::Paper;
 use selphy::toml_file;
 use serde::{Deserialize, Serialize};
 
@@ -50,13 +49,12 @@ impl ThemeChoice {
     }
 }
 
-/// `gui.toml`: the theme, and the paper, fit and output folder of the last
+/// `gui.toml`: the theme, and the fit and output folder of the last
 /// session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GuiSettings {
     pub theme: ThemeChoice,
-    pub paper: Paper,
     pub fit: Fit,
     pub out_dir: PathBuf,
 }
@@ -65,7 +63,6 @@ impl Default for GuiSettings {
     fn default() -> Self {
         Self {
             theme: ThemeChoice::default(),
-            paper: Paper::Postcard,
             fit: Fit::Contain,
             out_dir: default_out_dir(),
         }
@@ -94,9 +91,9 @@ pub fn default_out_dir() -> PathBuf {
 }
 
 /// The window settings and the printer config file, shared by the main
-/// window and the Settings window. The revision goes up when the paper, the
-/// fit or the saved profile changes, so that previews made for an older
-/// revision can be dropped.
+/// window and the Settings window. The revision goes up when the fit or the
+/// saved profile changes, so that previews made for an older revision can be
+/// dropped.
 #[derive(Debug)]
 pub struct Prefs {
     config: ConfigFile,
@@ -133,9 +130,9 @@ impl Prefs {
     /// Applies `change` and saves `gui.toml`. The change is kept when the
     /// save fails, so that the window still does what the user chose.
     pub fn change(&mut self, change: impl FnOnce(&mut GuiSettings)) -> Result<()> {
-        let before = (self.settings.paper, self.settings.fit);
+        let before = self.settings.fit;
         change(&mut self.settings);
-        if (self.settings.paper, self.settings.fit) != before {
+        if self.settings.fit != before {
             self.revision += 1;
         }
         self.settings.save(&self.path())
@@ -158,7 +155,6 @@ mod tests {
         let path = fresh_dir("gui-settings-missing").join(FILE_NAME);
         let settings = GuiSettings::load(&path).unwrap();
         assert_eq!(settings, GuiSettings::default());
-        assert_eq!(settings.paper, Paper::Postcard);
         assert_eq!(settings.fit, Fit::Contain);
         assert_eq!(settings.theme, ThemeChoice::System);
         assert!(settings.out_dir.ends_with("Pictures/SELPHY"));
@@ -169,7 +165,6 @@ mod tests {
         let path = fresh_dir("gui-settings-roundtrip").join(FILE_NAME);
         let settings = GuiSettings {
             theme: ThemeChoice::Dark,
-            paper: Paper::Card,
             fit: Fit::Cover,
             out_dir: PathBuf::from("/tmp/prints"),
         };
@@ -183,11 +178,11 @@ mod tests {
         std::fs::write(&path, "theme = \"light\"\n").unwrap();
         let settings = GuiSettings::load(&path).unwrap();
         assert_eq!(settings.theme, ThemeChoice::Light);
-        assert_eq!(settings.paper, Paper::Postcard);
+        assert_eq!(settings.fit, Fit::Contain);
     }
 
     #[test]
-    fn the_revision_follows_paper_and_fit_but_not_the_folder() {
+    fn the_revision_follows_the_fit_and_the_profile_but_not_the_folder() {
         let dir = fresh_dir("gui-prefs-revision");
         let mut prefs = Prefs::new(
             ConfigFile::at(dir.join("printer.toml")),
@@ -195,11 +190,12 @@ mod tests {
         );
         prefs.change(|s| s.out_dir = dir.join("out")).unwrap();
         assert_eq!(prefs.revision(), 0);
-        prefs.change(|s| s.paper = Paper::L).unwrap();
-        assert_eq!(prefs.revision(), 1);
+        prefs.change(|s| s.theme = ThemeChoice::Dark).unwrap();
+        assert_eq!(prefs.revision(), 0);
         prefs.change(|s| s.fit = Fit::Cover).unwrap();
+        assert_eq!(prefs.revision(), 1);
         prefs.printer_saved();
-        assert_eq!(prefs.revision(), 3);
+        assert_eq!(prefs.revision(), 2);
         assert_eq!(GuiSettings::load(&prefs.path()).unwrap(), *prefs.settings());
     }
 }

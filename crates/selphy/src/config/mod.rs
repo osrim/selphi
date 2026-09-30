@@ -1,7 +1,7 @@
-//! The printer config: the default paper and one [`Profile`] per calibrated
-//! paper. [`ConfigFile`] stores it as TOML at
-//! `~/.config/selphy/printer.toml`. A missing file means "use the defaults":
-//! postcard, with the values measured on the first SELPHY CP1500 this ran on.
+//! The printer config: the default fit and the postcard [`Profile`].
+//! [`ConfigFile`] stores it as TOML at `~/.config/selphy/printer.toml`. A
+//! missing file means "use the defaults": the values measured on the first
+//! SELPHY CP1500 this ran on.
 
 use std::fmt;
 
@@ -11,26 +11,17 @@ use serde::{Deserialize, Serialize};
 pub mod fields;
 mod file;
 
-use fields::Field;
-
-pub use file::{ConfigFile, FIT_ENV, Loaded, Override, PAPER_ENV};
+pub use file::{ConfigFile, FIT_ENV, Loaded, Override};
 
 use crate::geometry::{Edge, Fit, Orientation, Trim, mm_to_px};
 use crate::paper::Paper;
 
-/// The config file: the default paper, the default fit, and a table for
-/// each calibrated paper. A paper without a table uses [`Paper::default_profile`].
-///
-/// Keys missing from a table take their value from the paper's
-/// [`Paper::starting_profile`], except that a paper with no built-in
-/// profile must have all four trims. Unknown keys are an error.
+/// The config file: the default fit and the `[postcard]` table. Without a
+/// table, postcard uses [`Paper::default_profile`]. Keys missing from the
+/// table take their value from it. Unknown keys are an error.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawConfig")]
 pub struct Config {
-    /// The paper to use when none is named on the command line or in
-    /// `SELPHY_PAPER`. `None` means postcard.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub paper: Option<Paper>,
     /// The fit to use when none is named on the command line or in
     /// `SELPHY_FIT`. `None` means contain.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,122 +29,74 @@ pub struct Config {
     /// The `[postcard]` table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub postcard: Option<Profile>,
-    /// The `[l]` table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub l: Option<Profile>,
-    /// The `[card]` table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub card: Option<Profile>,
 }
 
 impl Config {
-    /// The profile of `paper`: its table, else its built-in profile. `None`
-    /// when the paper is not calibrated.
-    pub fn profile(&self, paper: Paper) -> Option<Profile> {
-        self.table(paper)
+    /// The postcard profile: the table, else the built-in profile.
+    pub fn profile(&self) -> Profile {
+        self.postcard
             .clone()
-            .or_else(|| paper.default_profile())
+            .unwrap_or_else(|| Paper::Postcard.default_profile())
     }
 
-    /// This config with `profile` as the table of `paper`. The other tables
-    /// are kept.
-    pub fn with_profile(&self, paper: Paper, profile: Profile) -> Config {
-        let mut updated = self.clone();
-        *updated.table_mut(paper) = Some(profile);
-        updated
+    /// This config with `profile` as the `[postcard]` table.
+    pub fn with_profile(&self, profile: Profile) -> Config {
+        Config {
+            postcard: Some(profile),
+            ..self.clone()
+        }
     }
 
-    /// Checks each table with [`Profile::validate`]. An error names the
-    /// table, as in `[l] trim_long_a_mm = -1: must be 0 or more`.
+    /// Checks the table with [`Profile::validate`]. An error names the
+    /// table, as in `[postcard] trim_long_a_mm = -1: must be 0 or more`.
     pub fn validate(&self) -> Result<()> {
-        for paper in Paper::ALL {
-            if let Some(profile) = self.table(paper) {
-                profile
-                    .validate()
-                    .map_err(|invalid| anyhow!("[{paper}] {invalid}"))?;
-            }
+        if let Some(profile) = &self.postcard {
+            profile
+                .validate()
+                .map_err(|invalid| anyhow!("[{}] {invalid}", Paper::Postcard))?;
         }
         Ok(())
     }
-
-    fn table(&self, paper: Paper) -> &Option<Profile> {
-        match paper {
-            Paper::Postcard => &self.postcard,
-            Paper::L => &self.l,
-            Paper::Card => &self.card,
-        }
-    }
-
-    fn table_mut(&mut self, paper: Paper) -> &mut Option<Profile> {
-        match paper {
-            Paper::Postcard => &mut self.postcard,
-            Paper::L => &mut self.l,
-            Paper::Card => &mut self.card,
-        }
-    }
 }
 
-/// The file as written, before each table is filled in from its paper's
-/// starting profile.
+/// The file as written, before the table is filled in from the built-in
+/// profile.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
-    paper: Option<Paper>,
     fit: Option<Fit>,
     postcard: Option<toml::Table>,
-    l: Option<toml::Table>,
-    card: Option<toml::Table>,
 }
 
 impl TryFrom<RawConfig> for Config {
     type Error = String;
 
     fn try_from(raw: RawConfig) -> Result<Self, String> {
-        let mut config = Config {
-            paper: raw.paper,
+        let postcard = raw
+            .postcard
+            .map(fill_in)
+            .transpose()
+            .map_err(|err| format!("[{}] {err}", Paper::Postcard))?;
+        Ok(Config {
             fit: raw.fit,
-            ..Config::default()
-        };
-        let tables = [
-            (Paper::Postcard, raw.postcard),
-            (Paper::L, raw.l),
-            (Paper::Card, raw.card),
-        ];
-        for (paper, table) in tables {
-            let Some(table) = table else { continue };
-            let profile = fill_in(paper, table).map_err(|err| format!("[{paper}] {err}"))?;
-            *config.table_mut(paper) = Some(profile);
-        }
-        Ok(config)
+            postcard,
+        })
     }
 }
 
-/// The profile in `table`, with each missing key taken from the starting
-/// profile of `paper`. A paper with no built-in profile must have all four
-/// trims in its table, so that no trim is guessed.
-fn fill_in(paper: Paper, table: toml::Table) -> Result<Profile, String> {
-    if paper.default_profile().is_none() {
-        let missing = Trim::ALL
-            .map(|trim| Field::for_trim(trim).key)
-            .into_iter()
-            .find(|key| !table.contains_key(*key));
-        if let Some(key) = missing {
-            return Err(format!(
-                "{key} is missing: {paper} paper has no built-in trims. Run: selphy calibrate \
-                 --paper {paper}"
-            ));
-        }
-    }
-    let mut merged =
-        toml::Table::try_from(paper.starting_profile()).expect("a profile serialises to a table");
+/// The profile in `table`, with each missing key taken from the built-in
+/// profile.
+fn fill_in(table: toml::Table) -> Result<Profile, String> {
+    let mut merged = toml::Table::try_from(Paper::Postcard.default_profile())
+        .expect("a profile serialises to a table");
     merged.extend(table);
     toml::Value::Table(merged)
         .try_into()
         .map_err(|err: toml::de::Error| err.to_string())
 }
 
-/// One paper's printer geometry: the canvas, the four trims, and the max
-/// stretch.
+/// The printer geometry for postcard paper: the canvas, the four trims, and
+/// the max stretch.
 ///
 /// Trims are millimetres of canvas the printer loses on each edge in
 /// Borderless mode. They are named for the LANDSCAPE canvas: long A is the

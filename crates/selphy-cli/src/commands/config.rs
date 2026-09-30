@@ -10,7 +10,6 @@ use clap::Args;
 use selphy::config::fields::{CANVAS_LONG, CANVAS_SHORT, Field, MAX_STRETCH};
 use selphy::config::{ConfigFile, FIT_ENV, Loaded, Profile};
 use selphy::geometry::{self, Edge, Fit, Orientation, Trim};
-use selphy::paper::Paper;
 use selphy::report::placement_summary;
 
 use crate::terminal::Terminal;
@@ -21,7 +20,7 @@ pub struct ConfigArgs {
     #[arg(long)]
     path: bool,
 
-    /// Write the paper's values to the config file, for editing by hand.
+    /// Write the values to the config file, for editing by hand.
     #[arg(long, conflicts_with = "path")]
     init: bool,
 
@@ -39,28 +38,22 @@ const SAMPLE_SHAPES: [(&str, u32, u32); 4] = [
     ("1:1", 2000, 2000),
 ];
 
-/// Prints the config file's path, writes the file, or shows the paper's
-/// geometry, as the flags select. The geometry is the values this run uses,
+/// Prints the config file's path, writes the file, or shows the geometry,
+/// as the flags select. The geometry is the values this run uses,
 /// with each value that an env var overrides marked.
-pub fn run(
-    args: ConfigArgs,
-    term: &mut Terminal,
-    file: &ConfigFile,
-    paper: Option<Paper>,
-) -> Result<ExitCode> {
+pub fn run(args: ConfigArgs, term: &mut Terminal, file: &ConfigFile) -> Result<ExitCode> {
     let path = file.path().display();
     if args.path {
         writeln!(term.out, "{path}")?;
         return Ok(ExitCode::SUCCESS);
     }
     let exists = file.exists()?;
-    let loaded = file.load(paper, args.fit)?;
+    let loaded = file.load(args.fit)?;
     if args.init {
         if exists {
             bail!("{path} already exists");
         }
-        let saved = loaded.saved_profile()?;
-        file.save(&loaded.saved.with_profile(loaded.paper, saved))?;
+        file.save(&loaded.saved.with_profile(loaded.saved_profile()))?;
         writeln!(term.out, "Wrote {path}")?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -69,7 +62,7 @@ pub fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// The config header, the paper, the fit, the canvas, the trims and the
+/// The config header, the fit, the canvas, the trims and the
 /// sample shapes, from the values this run uses.
 fn show(term: &mut Terminal, file: &ConfigFile, exists: bool, loaded: &Loaded) -> Result<()> {
     let profile = loaded.profile()?;
@@ -87,17 +80,6 @@ fn show(term: &mut Terminal, file: &ConfigFile, exists: bool, loaded: &Loaded) -
             .collect();
         writeln!(term.out, "Env     {}", set.join(", "))?;
     }
-    let calibrated: Vec<&str> = Paper::ALL
-        .into_iter()
-        .filter(|&paper| loaded.saved.profile(paper).is_some())
-        .map(Paper::name)
-        .collect();
-    writeln!(
-        term.out,
-        "Paper   {} (calibrated: {})",
-        loaded.paper,
-        calibrated.join(", ")
-    )?;
     writeln!(term.out, "Fit     {} ({})", loaded.fit, loaded.fit.label())?;
     writeln!(
         term.out,
@@ -176,14 +158,11 @@ mod tests {
     fn with_no_file_it_shows_the_defaults() {
         let file = ConfigFile::at(fresh_dir("cli-config-missing").join("printer.toml"));
         let (mut term, written) = Terminal::scripted([]);
-        assert_eq!(
-            run(SHOW, &mut term, &file, None).unwrap(),
-            ExitCode::SUCCESS
-        );
+        assert_eq!(run(SHOW, &mut term, &file).unwrap(), ExitCode::SUCCESS);
         let out = written.out();
         assert!(
             out.starts_with(&format!(
-                "Config  {}  (not found: using defaults)\nPaper   postcard (calibrated: postcard)\n\
+                "Config  {}  (not found: using defaults)\n\
                  Fit     contain (Whole photo)\nCanvas  150 x 100 mm, stretch up to 2.5%\n",
                 file.path().display()
             )),
@@ -201,15 +180,12 @@ mod tests {
         let file = ConfigFile::at(fresh_dir("cli-config-init").join("printer.toml"));
         let init = ConfigArgs { init: true, ..SHOW };
         let (mut term, written) = Terminal::scripted([]);
-        assert_eq!(
-            run(init, &mut term, &file, None).unwrap(),
-            ExitCode::SUCCESS
-        );
+        assert_eq!(run(init, &mut term, &file).unwrap(), ExitCode::SUCCESS);
         assert_eq!(written.out(), format!("Wrote {}\n", file.path().display()));
         assert!(file.exists().unwrap());
 
         let again = ConfigArgs { init: true, ..SHOW };
-        let err = run(again, &mut term, &file, None).unwrap_err();
+        let err = run(again, &mut term, &file).unwrap_err();
         assert_eq!(
             err.to_string(),
             format!("{} already exists", file.path().display())
@@ -222,7 +198,7 @@ mod tests {
             .with_overrides([("SELPHY_TRIM_LONG_A_MM", "3")]);
         let init = ConfigArgs { init: true, ..SHOW };
         let (mut term, _) = Terminal::scripted([]);
-        run(init, &mut term, &file, None).unwrap();
+        run(init, &mut term, &file).unwrap();
         let text = fs::read_to_string(file.path()).unwrap();
         assert!(text.contains("\n[postcard]\n"), "{text}");
         assert!(text.contains("trim_long_a_mm = 4.5"), "{text}");
@@ -233,7 +209,7 @@ mod tests {
         let file = ConfigFile::at("/somewhere/printer.toml");
         let args = ConfigArgs { path: true, ..SHOW };
         let (mut term, written) = Terminal::scripted([]);
-        run(args, &mut term, &file, None).unwrap();
+        run(args, &mut term, &file).unwrap();
         assert_eq!(written.out(), "/somewhere/printer.toml\n");
     }
 
@@ -245,7 +221,7 @@ mod tests {
                 ("SELPHY_MAX_STRETCH_PCT", "0"),
             ]);
         let (mut term, written) = Terminal::scripted([]);
-        run(SHOW, &mut term, &file, None).unwrap();
+        run(SHOW, &mut term, &file).unwrap();
         let out = written.out();
         assert!(
             out.contains("\nEnv     SELPHY_TRIM_LONG_A_MM=3, SELPHY_MAX_STRETCH_PCT=0\n"),
@@ -272,25 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn paper_shows_that_papers_profile_and_lists_the_calibrated_papers() {
-        let file = ConfigFile::at(fresh_dir("cli-config-paper").join("printer.toml"));
-        fs::write(
-            file.path(),
-            "[l]\ncanvas_long_mm = 121.0\ntrim_long_a_mm = 1.5\ntrim_long_b_mm = 0.0\n\
-             trim_short_a_mm = 0.0\ntrim_short_b_mm = 0.0\n",
-        )
-        .unwrap();
-        let (mut term, written) = Terminal::scripted([]);
-        run(SHOW, &mut term, &file, Some(Paper::L)).unwrap();
-        let out = written.out();
-        assert!(
-            out.contains("\nPaper   l (calibrated: postcard, l)\nFit     contain (Whole photo)\nCanvas  121 x 89 mm, "),
-            "{out}"
-        );
-        assert!(out.contains("  left            1.5       0.0\n"), "{out}");
-    }
-
-    #[test]
     fn fit_cover_shows_the_cut_edges_of_the_samples() {
         let file = ConfigFile::at(fresh_dir("cli-config-cover").join("printer.toml"));
         let (mut term, written) = Terminal::scripted([]);
@@ -298,7 +255,7 @@ mod tests {
             fit: Some(Fit::Cover),
             ..SHOW
         };
-        run(args, &mut term, &file, None).unwrap();
+        run(args, &mut term, &file).unwrap();
         let out = written.out();
         assert!(out.contains("\nFit     cover (Fill card)\n"), "{out}");
         for shape in ["4:3", "16:9"] {
@@ -309,16 +266,5 @@ mod tests {
             assert!(line.contains(", cut "), "{line}");
             assert!(!line.contains("white"), "{line}");
         }
-    }
-
-    #[test]
-    fn an_uncalibrated_paper_fails_with_the_calibrate_hint() {
-        let file = ConfigFile::at(fresh_dir("cli-config-uncalibrated").join("printer.toml"));
-        let (mut term, _) = Terminal::scripted([]);
-        let err = run(SHOW, &mut term, &file, Some(Paper::Card)).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "card paper is not calibrated. Run: selphy calibrate --paper card"
-        );
     }
 }

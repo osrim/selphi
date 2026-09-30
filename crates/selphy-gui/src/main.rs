@@ -1,5 +1,5 @@
 //! `selphy-gui`: a window for `selphy prepare`. Add photos, see each one's
-//! card, choose the paper and the fit, and prepare them. Settings… edits the
+//! card, choose the fit, and prepare them. Settings… edits the
 //! printer config the command line reads.
 
 use std::path::PathBuf;
@@ -32,6 +32,7 @@ actions!(
     [
         AddPhotos,
         CancelPrepare,
+        CancelSettings,
         ChooseFolder,
         ClearPhotos,
         OpenSettings,
@@ -39,6 +40,7 @@ actions!(
         Quit,
         Redo,
         RemoveSelected,
+        SaveSettings,
         SelectNext,
         SelectPrevious,
         Undo,
@@ -79,6 +81,8 @@ fn init_app(cx: &mut App) {
         KeyBinding::new("backspace", RemoveSelected, MAIN),
         KeyBinding::new("cmd-z", Undo, MAIN),
         KeyBinding::new("cmd-shift-z", Redo, MAIN),
+        KeyBinding::new("escape", CancelSettings, Some("SettingsWindow")),
+        KeyBinding::new("cmd-s", SaveSettings, Some("SettingsWindow")),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-q", Quit, None),
     ]);

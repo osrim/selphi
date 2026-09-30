@@ -14,7 +14,6 @@ use crate::atomic;
 use crate::config::Profile;
 use crate::geometry::{self, Fit, Placement};
 use crate::imaging::{self, Source};
-use crate::paper::Paper;
 use crate::record::Record;
 
 mod archive;
@@ -59,10 +58,24 @@ pub struct Done {
 pub struct Preview {
     /// The rendered canvas, scaled down to the requested side.
     pub image: RgbImage,
+    /// The whole placed picture at the same scale, including what a cover
+    /// placement puts past the canvas edge, which `image` clips off.
+    pub picture: RgbImage,
     /// Where the picture goes on the canvas.
     pub placement: Placement,
     /// The source's width and height, the right way up.
     pub source_size: (u32, u32),
+}
+
+/// One source rendered onto its canvas.
+struct Rendered {
+    /// The canvas, as the output holds it.
+    sheet: RgbImage,
+    placement: Placement,
+    /// The source in sRGB, the right way up.
+    photo: RgbImage,
+    /// The source's width and height, the right way up.
+    source_size: (u32, u32),
 }
 
 /// What preparing one photo would do, from its header only.
@@ -83,19 +96,17 @@ pub struct Dry {
 /// shares the camera Exif, so a clone is cheap to move to another thread.
 #[derive(Debug, Clone)]
 pub struct Job {
-    paper: Paper,
     profile: Profile,
     opts: Options,
     camera_exif: Option<Arc<[u8]>>,
 }
 
 impl Job {
-    /// A job that prepares photos for `paper` with its `profile`, as `opts`
-    /// says. The paper goes into each output's placement record. Reads the
+    /// A job that prepares photos with `profile`, as `opts` says. Reads the
     /// camera reference's Exif once, when one is given; an unreadable
     /// reference, or one with no Exif, is an error, so that no photo gets the
     /// wrong Exif.
-    pub fn new(paper: Paper, profile: Profile, opts: Options) -> Result<Self> {
+    pub fn new(profile: Profile, opts: Options) -> Result<Self> {
         let camera_exif = opts
             .camera_ref
             .as_deref()
@@ -103,7 +114,6 @@ impl Job {
             .transpose()?
             .map(Arc::from);
         Ok(Self {
-            paper,
             profile,
             opts,
             camera_exif,
@@ -156,30 +166,52 @@ impl Job {
     /// same pipeline, scaled down so that its longer side is `max_side_px`.
     /// Nothing is encoded or written.
     pub fn preview(&self, source: &Path, max_side_px: u32) -> Result<Preview> {
-        let (sheet, placement, source_size) = self.render(source)?;
+        let Rendered {
+            sheet,
+            placement,
+            photo,
+            source_size,
+        } = self.render(source)?;
         let (width, height) = sheet.dimensions();
-        let image = match imaging::fit_within(width, height, max_side_px) {
-            Some((w, h)) => imageops::resize(&sheet, w, h, FilterType::Triangle),
-            None => sheet,
-        };
+        let scale = imaging::fit_within(width, height, max_side_px)
+            .map_or(1.0, |(w, _)| f64::from(w) / f64::from(width));
+        let scaled = |px: i64| ((px as f64 * scale).round() as u32).max(1);
+        let image = imageops::resize(
+            &sheet,
+            scaled(width.into()),
+            scaled(height.into()),
+            FilterType::Triangle,
+        );
+        let picture = imageops::resize(
+            &photo,
+            scaled(placement.width),
+            scaled(placement.height),
+            FilterType::Triangle,
+        );
         Ok(Preview {
             image,
+            picture,
             placement,
             source_size,
         })
     }
 
     /// Loads `source`, places it, converts it to sRGB and renders the
-    /// canvas. Returns the canvas, the placement and the source's size.
-    fn render(&self, source: &Path) -> Result<(RgbImage, Placement, (u32, u32))> {
+    /// canvas.
+    fn render(&self, source: &Path) -> Result<Rendered> {
         let Source {
             image, icc_profile, ..
         } = imaging::load(source)?;
-        let size = (image.width(), image.height());
-        let placement = geometry::place(&self.profile, size.0, size.1, self.opts.fit)
+        let source_size = (image.width(), image.height());
+        let placement = geometry::place(&self.profile, source_size.0, source_size.1, self.opts.fit)
             .context("the image is empty")?;
         let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
-        Ok((imaging::render(&photo, &placement), placement, size))
+        Ok(Rendered {
+            sheet: imaging::render(&photo, &placement),
+            placement,
+            photo,
+            source_size,
+        })
     }
 
     /// Prepares the planned source and writes it to its output. The photo's
@@ -188,8 +220,10 @@ impl Job {
     /// 300 dpi header. The camera reference's Exif, when given, is written
     /// instead.
     fn prepare(&self, planned: &Planned) -> Result<Prepared> {
-        let (sheet, placement, _) = self.render(&planned.source)?;
-        let record = Record::of(self.paper, &placement);
+        let Rendered {
+            sheet, placement, ..
+        } = self.render(&planned.source)?;
+        let record = Record::of(&placement);
         let jpeg = imaging::encode_jpeg(&sheet, self.camera_exif.as_deref(), &[record.segment()])?;
 
         let output = planned.output.clone();
@@ -214,6 +248,7 @@ fn camera_exif(path: &Path) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paper::Paper;
     use crate::test_util::postcard;
     use crate::test_util::{exif_with_orientation, fresh_dir, write_jpeg};
 
@@ -292,7 +327,7 @@ mod tests {
     }
 
     fn job(dir: &Path, archive: bool) -> Job {
-        Job::new(Paper::Postcard, postcard(), options(dir, archive)).unwrap()
+        Job::new(postcard(), options(dir, archive)).unwrap()
     }
 
     #[test]
@@ -355,7 +390,7 @@ mod tests {
             camera_ref: Some(camera),
             ..options(&dir, false)
         };
-        let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
+        let job = Job::new(postcard(), opts).unwrap();
         for source in [a, b] {
             let output = job
                 .run_one(&planned(&dir, &source))
@@ -373,7 +408,7 @@ mod tests {
             camera_ref: Some(dir.join("missing.jpg")),
             ..options(&dir, true)
         };
-        let err = Job::new(Paper::Postcard, postcard(), opts).unwrap_err();
+        let err = Job::new(postcard(), opts).unwrap_err();
         assert!(format!("{err:#}").contains("camera reference"), "{err:#}");
     }
 
@@ -387,7 +422,7 @@ mod tests {
             camera_ref: Some(camera),
             ..options(&dir, false)
         };
-        let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
+        let job = Job::new(postcard(), opts).unwrap();
         let clone = job.clone();
 
         let from_job = job.run_one(&planned(&dir, &a)).unwrap().prepared.output;
@@ -400,16 +435,17 @@ mod tests {
     }
 
     #[test]
-    fn the_record_names_the_jobs_paper_and_canvas() {
+    fn the_record_names_the_paper_and_canvas() {
         let dir = fresh_dir("batch-paper");
         let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
-        let l = Paper::L.starting_profile();
-        let job = Job::new(Paper::L, l, options(&dir, false)).unwrap();
-        let output = job.run_one(&planned(&dir, &photo)).unwrap().prepared.output;
+        let output = job(&dir, false)
+            .run_one(&planned(&dir, &photo))
+            .unwrap()
+            .prepared
+            .output;
         let record = Record::read(&output).unwrap();
-        assert_eq!(record.paper, Paper::L);
-        // 119 x 89 mm at 300 ppi.
-        assert_eq!(record.canvas_px, (1406, 1051));
+        assert_eq!(record.paper, Paper::Postcard);
+        assert_eq!(record.canvas_px, (1772, 1181));
     }
 
     #[test]
@@ -449,7 +485,7 @@ mod tests {
                 fit,
                 ..options(&dir, false)
             };
-            let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
+            let job = Job::new(postcard(), opts).unwrap();
 
             let preview = job.preview(&photo, 400).unwrap();
             assert!(!dir.join("out").exists(), "{fit}: nothing is written");
@@ -469,6 +505,10 @@ mod tests {
         let canvas = &preview.placement.canvas;
         // 1772 x 1181 scaled to 300 on the long side.
         assert_eq!(preview.image.dimensions(), (300, 200));
+        let scale = 300.0 / 1772.0;
+        let (pw, ph) = preview.picture.dimensions();
+        assert!((f64::from(pw) - preview.placement.width as f64 * scale).abs() <= 1.0);
+        assert!((f64::from(ph) - preview.placement.height as f64 * scale).abs() <= 1.0);
         let aspect = |w: f64, h: f64| w / h;
         let (w, h) = preview.image.dimensions();
         assert!(
@@ -502,7 +542,7 @@ mod tests {
             fit: Fit::Cover,
             ..options(&dir, false)
         };
-        let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
+        let job = Job::new(postcard(), opts).unwrap();
         let prepared = job.run_one(&planned(&dir, &photo)).unwrap().prepared;
         assert_eq!(prepared.placement.fit, Fit::Cover);
         assert_eq!(Record::read(&prepared.output).unwrap().fit, Fit::Cover);

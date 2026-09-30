@@ -11,7 +11,6 @@ use clap::Args;
 use selphy::adjust;
 use selphy::config::ConfigFile;
 use selphy::geometry::{Edge, px_to_mm};
-use selphy::paper::Paper;
 use selphy::record::Record;
 
 use crate::commands::EdgeArgs;
@@ -29,33 +28,17 @@ pub struct AdjustArgs {
 }
 
 /// Asks for the white on each edge of the printed file, then offers to save
-/// the corrected trims to the profile of the paper the file was prepared
-/// for. `paper`, from `--paper` or `SELPHY_PAPER`, is ignored, with a
-/// warning when it differs. The trims are
-/// computed from the record's margins, so starting from the file's values is
+/// the corrected trims. The trims are computed from the record's margins, so starting from the file's values is
 /// right even when the photo was prepared with an env override.
 ///
 /// A file that cannot correct the profile, such as a Fill card print, is an
 /// error before the prompts. Measurements given as edge flags are not asked
 /// for, and `--yes` saves without asking.
-pub fn run(
-    args: AdjustArgs,
-    term: &mut Terminal,
-    file: &ConfigFile,
-    paper: Option<Paper>,
-) -> Result<ExitCode> {
+pub fn run(args: AdjustArgs, term: &mut Terminal, file: &ConfigFile) -> Result<ExitCode> {
     let record = Record::read(&args.file)?;
-    if let Some(paper) = paper.filter(|&paper| paper != record.paper) {
-        writeln!(
-            term.err,
-            "the {paper} paper setting is ignored: {} was prepared for {} paper",
-            args.file.display(),
-            record.paper
-        )?;
-    }
-    // The record names the paper and the fit, so the env and the file do not.
-    let loaded = file.load(Some(record.paper), Some(record.fit))?;
-    let before = loaded.saved_profile()?;
+    // The record names the fit, so the env and the file do not.
+    let loaded = file.load(Some(record.fit))?;
+    let before = loaded.saved_profile();
     adjust::check_record(&before, &record)?;
 
     let margins: Vec<String> = Edge::ALL
@@ -105,24 +88,19 @@ mod tests {
     use selphy::config::{Config, Profile};
     use selphy::geometry::Fit;
     use selphy::prepare::{Job, Options};
-    use selphy::test_util::{fresh_dir, write_jpeg};
+    use selphy::test_util::{fresh_dir, postcard, write_jpeg};
 
     use super::*;
     use crate::terminal::Answer;
 
-    /// A 16:9 photo prepared with the postcard defaults, in `dir`. It is
-    /// landscape, with white at the top and bottom.
+    /// A 16:9 photo prepared with the defaults, in `dir`. It is landscape,
+    /// with white at the top and bottom.
     fn prepared(dir: &Path) -> PathBuf {
-        prepared_for(dir, Paper::Postcard, Paper::Postcard.starting_profile())
+        prepared_with(dir, Fit::Contain)
     }
 
-    /// A 16:9 photo prepared for `paper` with `profile`, in `dir`.
-    fn prepared_for(dir: &Path, paper: Paper, profile: Profile) -> PathBuf {
-        prepared_with(dir, paper, profile, Fit::Contain)
-    }
-
-    /// A 16:9 photo prepared for `paper` with `profile` and `fit`, in `dir`.
-    fn prepared_with(dir: &Path, paper: Paper, profile: Profile, fit: Fit) -> PathBuf {
+    /// A 16:9 photo prepared with the defaults and `fit`, in `dir`.
+    fn prepared_with(dir: &Path, fit: Fit) -> PathBuf {
         let source = write_jpeg(&dir.join("wide.jpg"), 320, 180, &[]);
         let opts = Options {
             out_dir: dir.join("out"),
@@ -131,7 +109,7 @@ mod tests {
             fit,
         };
         let planned = selphy::prepare::plan(&[source], &opts.out_dir).unwrap();
-        let done = Job::new(paper, profile, opts)
+        let done = Job::new(postcard(), opts)
             .unwrap()
             .run_one(&planned[0])
             .unwrap();
@@ -161,11 +139,11 @@ mod tests {
             ..args(prepared(&dir))
         };
 
-        let code = run(args, &mut term, &file, None).unwrap();
+        let code = run(args, &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         assert!(written.out().ends_with("Saved.\n"), "{}", written.out());
-        let saved = file.load(None, None).unwrap().saved_profile().unwrap();
+        let saved = file.load(None).unwrap().saved_profile();
         assert_eq!(saved.trim_long_a_mm, 3.99);
         assert_eq!(saved.trim_long_b_mm, 5.8);
         // Top and bottom were not given: they keep their trim, not 0 mm of
@@ -187,7 +165,7 @@ mod tests {
             },
             ..args(prepared(&dir))
         };
-        let err = run(args, &mut term, &file, None).unwrap_err();
+        let err = run(args, &mut term, &file).unwrap_err();
         assert!(format!("{err:#}").contains("on the left edge"), "{err:#}");
         assert!(!file.exists().unwrap());
     }
@@ -207,7 +185,7 @@ mod tests {
         for case in [flags, args(photo)] {
             let (mut term, _) = Terminal::scripted([]);
             term.is_interactive = false;
-            let err = run(case, &mut term, &file, None).unwrap_err();
+            let err = run(case, &mut term, &file).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 "the prompts need a terminal; give the edges as --left/--top/--right/--bottom \
@@ -232,7 +210,7 @@ mod tests {
         let (mut term, written) = Terminal::scripted(answers);
 
         let photo = prepared(&dir);
-        let code = run(args(photo.clone()), &mut term, &file, None).unwrap();
+        let code = run(args(photo.clone()), &mut term, &file).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         let out = written.out();
@@ -253,7 +231,7 @@ mod tests {
             "{out}"
         );
         assert!(out.ends_with("Saved.\n"), "{out}");
-        let saved = file.load(None, None).unwrap().saved_profile().unwrap();
+        let saved = file.load(None).unwrap().saved_profile();
         assert_eq!(saved.trim_long_a_mm, 3.99);
         assert_eq!(saved.trim_long_b_mm, 5.8);
         assert_eq!(saved.trim_short_a_mm, 2.1);
@@ -265,7 +243,7 @@ mod tests {
         let dir = fresh_dir("cli-adjust-bad");
         let file = ConfigFile::at(dir.join("printer.toml"));
         let (mut term, _) = Terminal::scripted(numbers([9.0, 0.0, 0.0, 0.0]));
-        let err = run(args(prepared(&dir)), &mut term, &file, None).unwrap_err();
+        let err = run(args(prepared(&dir)), &mut term, &file).unwrap_err();
         assert!(format!("{err:#}").contains("on the left edge"), "{err:#}");
         assert!(!file.exists().unwrap());
     }
@@ -281,7 +259,7 @@ mod tests {
         answers.push(Answer::Confirm(true));
         let (mut term, written) = Terminal::scripted(answers);
 
-        run(args(prepared(&dir)), &mut term, &file, None).unwrap();
+        run(args(prepared(&dir)), &mut term, &file).unwrap();
 
         assert_eq!(
             written.err(),
@@ -292,62 +270,14 @@ mod tests {
         assert!(text.contains("trim_long_b_mm = 5.5"), "{text}");
     }
 
-    fn l_profile() -> Profile {
-        Profile {
-            trim_long_a_mm: 2.0,
-            trim_long_b_mm: 2.0,
-            trim_short_a_mm: 1.0,
-            trim_short_b_mm: 1.0,
-            ..Paper::L.starting_profile()
-        }
-    }
-
-    #[test]
-    fn an_l_file_corrects_the_l_table_whatever_the_paper_flag_says() {
-        let dir = fresh_dir("cli-adjust-l");
-        let file = ConfigFile::at(dir.join("printer.toml"));
-        file.save(&Config::default().with_profile(Paper::L, l_profile()))
-            .unwrap();
-        let photo = prepared_for(&dir, Paper::L, l_profile());
-        // left 0.5 mm of white; top, right and bottom as planned.
-        let (mut term, written) = Terminal::scripted([
-            Answer::Number(0.5),
-            Answer::Number(6.5),
-            Answer::Number(0.0),
-            Answer::Number(6.5),
-            Answer::Confirm(true),
-        ]);
-
-        run(args(photo.clone()), &mut term, &file, Some(Paper::Card)).unwrap();
-
-        assert_eq!(
-            written.err(),
-            format!(
-                "the card paper setting is ignored: {} was prepared for l paper\n",
-                photo.display()
-            )
-        );
-        let saved = file.load(None, None).unwrap().saved;
-        assert_eq!(saved.postcard, None, "postcard is untouched");
-        let l = saved.l.unwrap();
-        // The left and right margins are 24 px, 2.03 mm: trim = margin - white.
-        assert_eq!(l.trim_long_a_mm, 1.53);
-        assert_eq!(l.trim_long_b_mm, 2.03);
-    }
-
     #[test]
     fn a_fill_card_print_is_refused_before_the_prompts() {
         let dir = fresh_dir("cli-adjust-cover");
         let file = ConfigFile::at(dir.join("printer.toml"));
-        let photo = prepared_with(
-            &dir,
-            Paper::Postcard,
-            Paper::Postcard.starting_profile(),
-            Fit::Cover,
-        );
+        let photo = prepared_with(&dir, Fit::Cover);
         let (mut term, written) = Terminal::scripted([]);
 
-        let err = run(args(photo), &mut term, &file, None).unwrap_err();
+        let err = run(args(photo), &mut term, &file).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -364,13 +294,12 @@ mod tests {
         let photo = prepared(&dir);
         let smaller = Profile {
             canvas_long_mm: 148.0,
-            ..Paper::Postcard.starting_profile()
+            ..postcard()
         };
-        file.save(&Config::default().with_profile(Paper::Postcard, smaller))
-            .unwrap();
+        file.save(&Config::default().with_profile(smaller)).unwrap();
         let (mut term, written) = Terminal::scripted([]);
 
-        let err = run(args(photo), &mut term, &file, None).unwrap_err();
+        let err = run(args(photo), &mut term, &file).unwrap_err();
 
         assert!(
             err.to_string()

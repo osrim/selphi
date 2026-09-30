@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::SharedString;
 use selphy::geometry::Placement;
-use selphy::paper::Paper;
 use selphy::report::{error_chain, placement_summary, sentence};
 
 use crate::run::Summary;
@@ -31,15 +30,6 @@ pub fn placement_text(placement: &Placement) -> String {
     let mut orientation = placement.canvas.orientation.name().to_string();
     orientation[..1].make_ascii_uppercase();
     format!("{orientation}, {}", placement_summary(placement))
-}
-
-/// The paper's name as the window shows it.
-pub fn paper_label(paper: Paper) -> &'static str {
-    match paper {
-        Paper::Postcard => "Postcard",
-        Paper::L => "L",
-        Paper::Card => "Card",
-    }
 }
 
 /// An error that is not about one photo, as a sentence for a notice.
@@ -94,7 +84,7 @@ mod tests {
 
     #[test]
     fn placement_text_starts_with_the_orientation() {
-        let profile = Paper::Postcard.starting_profile();
+        let profile = selphy::paper::Paper::Postcard.default_profile();
         let placement = place(&profile, 1920, 1080, Fit::Contain).unwrap();
         assert_eq!(
             placement_text(&placement),

@@ -8,8 +8,6 @@ use gpui_kit::base::History;
 use selphy::prepare::Done;
 use selphy::report::photo_error;
 
-use crate::text::placement_text;
-
 /// How many list changes Undo can take back.
 const UNDO_DEPTH: usize = 50;
 
@@ -30,18 +28,16 @@ impl PhotoId {
 pub enum Status {
     Waiting,
     Preparing,
-    Prepared { summary: String, output: PathBuf },
+    Prepared { output: PathBuf },
     Failed(String),
 }
 
 impl Status {
-    /// The status for a finished `Job::run_one` of `source`: "Portrait,
-    /// stretched 1.9%, edge to edge" and the output, or why it failed,
-    /// without the path the row already shows.
+    /// The status for a finished `Job::run_one` of `source`: the output, or
+    /// why it failed, without the path the row already shows.
     pub fn from_result(result: &anyhow::Result<Done>, source: &Path) -> Self {
         match result {
             Ok(done) => Self::Prepared {
-                summary: placement_text(&done.prepared.placement),
                 output: done.prepared.output.clone(),
             },
             Err(err) => Self::Failed(photo_error(err, source)),
@@ -316,9 +312,8 @@ mod tests {
         batch.photos().iter().map(Photo::id).collect()
     }
 
-    fn prepared(summary: &str) -> Status {
+    fn prepared() -> Status {
         Status::Prepared {
-            summary: summary.into(),
             output: PathBuf::from("out.jpg"),
         }
     }
@@ -348,7 +343,7 @@ mod tests {
         let mut batch = batch(&["a.jpg"]);
         let queue = batch.queue();
         batch.clear();
-        batch.set_status(queue[0].0, prepared("ok"));
+        batch.set_status(queue[0].0, prepared());
         assert!(batch.is_empty());
     }
 
@@ -421,14 +416,14 @@ mod tests {
         let mut batch = batch(&["a.jpg", "b.jpg"]);
         let both = ids(&batch);
         batch.start();
-        batch.set_status(both[0], prepared("ok"));
+        batch.set_status(both[0], prepared());
         batch.set_status(both[1], Status::Failed("bad".into()));
         batch.finish();
 
         batch.clear();
         batch.undo();
         let statuses: Vec<_> = batch.photos().iter().map(|p| p.status().clone()).collect();
-        assert_eq!(statuses, [prepared("ok"), Status::Failed("bad".into())]);
+        assert_eq!(statuses, [prepared(), Status::Failed("bad".into())]);
         assert_eq!(ids(&batch), both);
     }
 
@@ -439,11 +434,11 @@ mod tests {
         batch.clear();
         batch.undo();
         batch.start();
-        batch.set_status(a, prepared("ok"));
+        batch.set_status(a, prepared());
         batch.finish();
         batch.redo();
         batch.undo();
-        assert_eq!(*batch.photos()[0].status(), prepared("ok"));
+        assert_eq!(*batch.photos()[0].status(), prepared());
     }
 
     #[test]
@@ -491,7 +486,7 @@ mod tests {
     fn start_resets_the_results() {
         let mut batch = batch(&["a.jpg"]);
         let id = ids(&batch)[0];
-        batch.set_status(id, prepared("ok"));
+        batch.set_status(id, prepared());
         batch.start();
         assert_eq!(*batch.photos()[0].status(), Status::Waiting);
     }
@@ -501,28 +496,7 @@ mod tests {
         let mut batch = batch(&["a.jpg"]);
         let id = ids(&batch)[0];
         assert_eq!(batch.photos()[0].shown_file(), Path::new("a.jpg"));
-        batch.set_status(id, prepared("ok"));
+        batch.set_status(id, prepared());
         assert_eq!(batch.photos()[0].shown_file(), Path::new("out.jpg"));
-    }
-
-    #[test]
-    fn a_prepared_row_starts_with_the_orientation() {
-        let profile = selphy::paper::Paper::Postcard.starting_profile();
-        let placement =
-            selphy::geometry::place(&profile, 1920, 1080, selphy::geometry::Fit::Contain).unwrap();
-        let done = Done {
-            prepared: selphy::prepare::Prepared {
-                output: PathBuf::from("out/a-selphy.jpg"),
-                placement,
-            },
-            archived: None,
-        };
-        assert_eq!(
-            Status::from_result(&Ok(done), Path::new("a.jpg")),
-            Status::Prepared {
-                summary: "Landscape, stretched 2.5%, white top 7.2, bottom 7.2 mm".into(),
-                output: PathBuf::from("out/a-selphy.jpg"),
-            }
-        );
     }
 }

@@ -44,5 +44,5 @@ pub fn write_jpeg(path: &Path, width: u16, height: u16, exif: &[u8]) -> PathBuf 
 
 /// The built-in postcard profile.
 pub fn postcard() -> Profile {
-    Paper::Postcard.starting_profile()
+    Paper::Postcard.default_profile()
 }

@@ -17,7 +17,7 @@ use crate::record::Record;
 /// The margin is canvas edge to picture edge, so this holds on edges with
 /// deliberate white too.
 ///
-/// `profile` must be the profile of `record.paper`. A record that
+/// `profile` must be the profile the file was prepared with. A record that
 /// [`check_record`] refuses is an error. A measurement that gives a negative
 /// trim, or a trim over half the canvas, is an error: it is a wrong reading.
 /// A result that leaves nothing to print is an error from

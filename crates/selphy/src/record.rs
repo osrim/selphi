@@ -40,11 +40,11 @@ pub struct Record {
 }
 
 impl Record {
-    /// The record of `placement`, prepared for `paper`.
-    pub fn of(paper: Paper, placement: &Placement) -> Self {
+    /// The record of `placement`, prepared for postcard paper.
+    pub fn of(placement: &Placement) -> Self {
         let canvas = &placement.canvas;
         Self {
-            paper,
+            paper: Paper::Postcard,
             fit: placement.fit,
             orientation: canvas.orientation,
             canvas_px: (canvas.width, canvas.height),
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn text_form_round_trips() {
-        let record = Record::of(Paper::Postcard, &portrait());
+        let record = Record::of(&portrait());
         let text = record.to_string();
         assert_eq!(
             text,
@@ -203,19 +203,19 @@ mod tests {
 
     #[test]
     fn of_records_the_paper_the_fit_and_the_canvas() {
-        let record = Record::of(Paper::Card, &portrait());
-        assert_eq!(record.paper, Paper::Card);
+        let record = Record::of(&portrait());
+        assert_eq!(record.paper, Paper::Postcard);
         assert_eq!(record.fit, Fit::Contain);
         assert_eq!(record.orientation, Orientation::Portrait);
         assert_eq!(record.canvas_px, (1181, 1772));
         let text = record.to_string();
-        assert!(text.starts_with("v2 card contain portrait "), "{text}");
+        assert!(text.starts_with("v2 postcard contain portrait "), "{text}");
     }
 
     #[test]
     fn a_cover_record_says_cover_and_keeps_its_negative_margins() {
         let p = place(&postcard(), 1920, 1080, Fit::Cover).unwrap();
-        let record = Record::of(Paper::Postcard, &p);
+        let record = Record::of(&p);
         assert_eq!(record.fit, Fit::Cover);
         assert!(record.margin_px(Edge::Left) < 0);
         let text = record.to_string();
@@ -238,7 +238,7 @@ mod tests {
     fn prepared_jpeg_carries_the_record() {
         let p = portrait();
         let blank = RgbImage::from_pixel(1181, 1772, Rgb([255; 3]));
-        let record = Record::of(Paper::Postcard, &p);
+        let record = Record::of(&p);
         let jpeg = imaging::encode_jpeg(&blank, None, &[record.segment()]).unwrap();
         assert_eq!(Record::find(&jpeg).unwrap(), record);
     }
@@ -267,7 +267,7 @@ mod tests {
         let mut orientations = Vec::new();
         for (w, h) in sizes {
             let p = place(&profile, w, h, Fit::Contain).unwrap();
-            let record = Record::of(Paper::Postcard, &p);
+            let record = Record::of(&p);
             orientations.push(record.orientation);
             for edge in Edge::ALL {
                 let trim_mm = record.trim_mm(edge, p.white_mm(edge));
@@ -295,8 +295,7 @@ mod tests {
     fn broken_files_give_errors_not_panics() {
         let p = portrait();
         let blank = RgbImage::from_pixel(1181, 1772, Rgb([255; 3]));
-        let jpeg = imaging::encode_jpeg(&blank, None, &[Record::of(Paper::Postcard, &p).segment()])
-            .unwrap();
+        let jpeg = imaging::encode_jpeg(&blank, None, &[Record::of(&p).segment()]).unwrap();
         for cut in [0, 1, 2, 3, 5, 20, 40] {
             assert!(Record::find(&jpeg[..cut]).is_err(), "cut at {cut}");
         }
@@ -311,34 +310,37 @@ mod tests {
                 "unknown placement record version",
             ),
             (
-                v2("a4 contain portrait canvas=1x1 left=1 top=1 right=1 bottom=1"),
+                v2("card contain portrait canvas=1x1 left=1 top=1 right=1 bottom=1"),
                 "unknown paper",
             ),
             (
-                v2("l stretch portrait canvas=1x1 left=1 top=1 right=1 bottom=1"),
+                v2("postcard stretch portrait canvas=1x1 left=1 top=1 right=1 bottom=1"),
                 "unknown fit",
             ),
             (
-                v2("l contain sideways canvas=1x1 left=1 top=1 right=1 bottom=1"),
+                v2("postcard contain sideways canvas=1x1 left=1 top=1 right=1 bottom=1"),
                 "orientation",
             ),
             (
-                v2("l contain portrait left=1 top=1 right=1 bottom=1"),
+                v2("postcard contain portrait left=1 top=1 right=1 bottom=1"),
                 "expected canvas=<width>x<height>",
             ),
             (
-                v2("l contain portrait canvas=1x left=1 top=1 right=1 bottom=1"),
+                v2("postcard contain portrait canvas=1x left=1 top=1 right=1 bottom=1"),
                 "expected canvas=<width>x<height>",
             ),
             (
-                v2("l contain portrait canvas=1x1 left=1 top=1 right=1"),
+                v2("postcard contain portrait canvas=1x1 left=1 top=1 right=1"),
                 "no bottom margin",
             ),
             (
-                v2("l contain portrait canvas=1x1 left=1 top=x right=1 bottom=1"),
+                v2("postcard contain portrait canvas=1x1 left=1 top=x right=1 bottom=1"),
                 "not a whole number",
             ),
-            (v2("l contain portrait canvas=1x1 middle=1"), "unknown edge"),
+            (
+                v2("postcard contain portrait canvas=1x1 middle=1"),
+                "unknown edge",
+            ),
         ];
         for (text, reason) in cases {
             let err = text.parse::<Record>().unwrap_err();
