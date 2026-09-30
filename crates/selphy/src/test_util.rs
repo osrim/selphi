@@ -3,10 +3,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// An empty directory under the system temp dir, unique to this test run and
-/// `name`. Anything left there by an earlier run is removed first.
+/// An empty directory under the system temp dir, named for `name`. Anything
+/// left there by an earlier run is removed first, so runs do not pile up
+/// folders. Each test uses its own `name`.
 pub fn fresh_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("selphy-test-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("selphy-test-{name}"));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir

@@ -14,5 +14,9 @@ moxcms.workspace = true
 serde.workspace = true
 toml.workspace = true
 
+[features]
+# The test helpers, for the tests of the CLI and the GUI.
+test-util = []
+
 [lints]
 workspace = true

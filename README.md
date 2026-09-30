@@ -25,6 +25,13 @@ ImageMagick and exiftool are not needed.
 
 ## Commands
 
+```
+selphy [--config <FILE>] <command>
+```
+
+`--config` names the printer config file for any command. It can go before
+or after the command. See [Configuration](#configuration).
+
 ### `selphy prepare`
 
 Turns photos into print-ready JPEGs.
@@ -67,7 +74,8 @@ The output has no Exif unless `--camera-ref` is given. Hidden files, such as
 the `._name.jpg` files macOS writes on external drives, are skipped.
 
 A photo that fails is reported on stderr and left where it was; the other
-photos are still prepared. The output reports each photo:
+photos are still prepared. The output reports each photo, prepared ones on
+stdout and failed ones on stderr:
 
 ```
 ✓ src/a.jpg  portrait, stretched 1.9%, edge to edge
@@ -78,7 +86,9 @@ photos are still prepared. The output reports each photo:
 1 failed and left in place
 ```
 
-The exit code is 1 when any photo failed.
+The exit code is 1 when any photo failed. When no images are found, it says
+"No images in …" on stderr and exits 0. The progress bar is shown only when
+stderr is a terminal.
 
 ### `selphy-gui`
 
@@ -108,7 +118,10 @@ until Save.
 ### `selphy config`
 
 Shows the config file, the trim on each edge in both orientations, and how
-common photo shapes land on the card.
+common photo shapes land on the card. The values are the ones this run uses:
+when env vars override values, an `Env` line under the header lists them, and
+each overridden value is marked with `(from SELPHY_…)`. In the trim
+table, the mark also names the column, as in `(portrait from SELPHY_…)`.
 
 ```
 $ selphy config
@@ -131,7 +144,7 @@ How a photo lands
 | Option | Meaning |
 |---|---|
 | `--path` | Print only the config file's path. |
-| `--init` | Write the current values to the config file, for editing by hand. Fails if the file exists. |
+| `--init` | Write the current values to the config file, for editing by hand. Env overrides are not written. Fails if the file exists. |
 
 ### `selphy calibrate`
 
@@ -161,7 +174,7 @@ confirm.
 | `--font <FILE>` | The TrueType font for the labels. Default: Arial from macOS. Also read from `$SELPHY_FONT`. |
 
 The readings need a terminal. Without one, `calibrate` writes the sheet and
-tells you the command to enter the readings later.
+tells you, on stderr, the command to enter the readings later.
 
 ### `selphy adjust`
 
@@ -188,10 +201,33 @@ would be below 0 or more than half the canvas side.
 The file must hold a placement record, which only `selphy prepare` writes.
 The prompts need a terminal.
 
+`calibrate` and `adjust` save the file's values with the new trims, never the
+env overrides. For each trim they save while an env var overrides it, they
+warn on stderr that the saved value is not used while the var is set.
+
+## Output and exit codes
+
+stdout gets results and tables: the prepared photos, the summary, the
+`config` output, the change tables, "Saved.", "Not saved." and "Wrote …".
+stderr gets problems and hints: failed photos, "No images in …", the "Not a
+terminal" hint, override warnings and `error: …`.
+
+| Code | Meaning |
+|---|---|
+| 0 | Done as asked. This includes "No images" and answering No to "Save?". |
+| 1 | An error, or at least one photo failed. |
+| 2 | A usage error, such as an unknown option. |
+| 130 | Cancelled at a prompt with Esc or Ctrl-C. Nothing is saved. |
+
 ## Configuration
 
+Each value is resolved in this order: command line, then env, then the config
+file, then the defaults. On the command line, `--config` chooses the file; env
+vars set single values.
+
 The config file is `~/.config/selphy/printer.toml`. `$XDG_CONFIG_HOME` moves
-it, and `$SELPHY_CONFIG` names the file directly. Without a file, the
+it. `--config <FILE>` names the file directly, and so does `$SELPHY_CONFIG`;
+the flag wins over the env var. Without a file, the
 defaults below apply. Keys left out of the file take their default; unknown
 keys are an error. So are values that leave nothing to print on: a canvas
 side of 0 or less, a negative trim or stretch, or two trims that together
@@ -210,6 +246,26 @@ max_stretch_pct = 2.5    # largest one-axis stretch
 The trims are named for the landscape canvas. The printer rotates a portrait
 photo so that its top lands on long A and its left on short B; `selphy config`
 shows the result for both orientations.
+
+Each value has an env var that overrides it for one run, for example
+`SELPHY_MAX_STRETCH_PCT=0 selphy prepare`. An override is never written to
+the file. An empty value counts as not set. A value that is not a number is
+an error that names the var, and so is an override that leaves nothing to
+print on.
+
+| Env var | Overrides |
+|---|---|
+| `SELPHY_CANVAS_LONG_MM` | `canvas_long_mm` |
+| `SELPHY_CANVAS_SHORT_MM` | `canvas_short_mm` |
+| `SELPHY_TRIM_LONG_A_MM` | `trim_long_a_mm` |
+| `SELPHY_TRIM_LONG_B_MM` | `trim_long_b_mm` |
+| `SELPHY_TRIM_SHORT_A_MM` | `trim_short_a_mm` |
+| `SELPHY_TRIM_SHORT_B_MM` | `trim_short_b_mm` |
+| `SELPHY_MAX_STRETCH_PCT` | `max_stretch_pct` |
+
+`selphy-gui` uses the same file (`$SELPHY_CONFIG` if set) and the same
+overrides when it prepares photos. Its Config dialog shows and saves the
+file's values, without the overrides.
 
 To edit the values: run `selphy config --init`, then open the file with
 `$EDITOR "$(selphy config --path)"`. `selphy` rewrites the file, so comments

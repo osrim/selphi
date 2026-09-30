@@ -12,6 +12,7 @@ pub mod imaging;
 pub mod prepare;
 pub mod record;
 pub mod report;
+pub mod toml_file;
 
-#[cfg(test)]
-mod test_util;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;

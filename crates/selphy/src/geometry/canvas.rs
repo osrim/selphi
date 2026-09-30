@@ -2,6 +2,7 @@
 //! lands on which edge.
 
 use crate::config::Config;
+use crate::config::fields::Field;
 
 /// Output resolution. The SELPHY prints at 300 dpi.
 pub const PPI: f64 = 300.0;
@@ -124,32 +125,17 @@ impl Trim {
 
     /// This trim's value in `cfg`.
     pub fn mm(self, cfg: &Config) -> f64 {
-        match self {
-            Self::LongA => cfg.trim_long_a_mm,
-            Self::LongB => cfg.trim_long_b_mm,
-            Self::ShortA => cfg.trim_short_a_mm,
-            Self::ShortB => cfg.trim_short_b_mm,
-        }
+        Field::for_trim(self).get(cfg)
     }
 
     /// The TOML key of this trim's field.
     pub(crate) fn key(self) -> &'static str {
-        match self {
-            Self::LongA => "trim_long_a_mm",
-            Self::LongB => "trim_long_b_mm",
-            Self::ShortA => "trim_short_a_mm",
-            Self::ShortB => "trim_short_b_mm",
-        }
+        Field::for_trim(self).key
     }
 
     /// The config field that holds this trim, for writing.
     pub fn mm_mut(self, cfg: &mut Config) -> &mut f64 {
-        match self {
-            Self::LongA => &mut cfg.trim_long_a_mm,
-            Self::LongB => &mut cfg.trim_long_b_mm,
-            Self::ShortA => &mut cfg.trim_short_a_mm,
-            Self::ShortB => &mut cfg.trim_short_b_mm,
-        }
+        Field::for_trim(self).get_mut(cfg)
     }
 }
 

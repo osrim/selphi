@@ -2,6 +2,8 @@
 //! and prepare them; the Config dialog edits the config file the command
 //! line reads.
 
+use std::path::PathBuf;
+
 use gpui_kit::{
     AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds,
     WindowOptions, actions, px, size,
@@ -11,6 +13,8 @@ mod appearance;
 mod batch;
 mod batch_view;
 mod config_panel;
+
+use selphy::config::ConfigFile;
 
 use batch_view::BatchView;
 
@@ -71,8 +75,14 @@ fn main() {
                 window_min_size: Some(size(px(640.), px(480.))),
                 ..Default::default()
             };
+            let config = ConfigFile::locate(
+                // Empty counts as not set, as it does for the CLI's --config.
+                std::env::var_os("SELPHY_CONFIG")
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from),
+            );
             gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| BatchView::new(window, cx))
+                cx.new(|cx| BatchView::new(config, window, cx))
             })
             .expect("failed to open the window");
             cx.activate(true);

@@ -15,5 +15,8 @@ clap.workspace = true
 indicatif.workspace = true
 inquire.workspace = true
 
+[dev-dependencies]
+selphy = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

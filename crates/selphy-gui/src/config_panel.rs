@@ -1,8 +1,6 @@
 //! The Config dialog body: the window's Appearance, and the Printer values that
 //! `selphy` reads. Each section is a heading over groups of fields.
 
-use std::path::PathBuf;
-
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
     form::{Field, Form},
@@ -16,38 +14,43 @@ use gpui_kit::{
     SharedString, Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 
-use selphy::config::{self, Config};
+use selphy::config::fields::{
+    CANVAS_LONG, CANVAS_SHORT, Field as ConfigField, MAX_STRETCH, TRIM_LONG_A, TRIM_LONG_B,
+    TRIM_SHORT_A, TRIM_SHORT_B,
+};
+use selphy::config::{Config, ConfigFile};
+use selphy::toml_file;
 
 use crate::appearance::{self, Appearance, ThemeChoice};
 use crate::batch_view::error_sentence;
 
-/// One editable value: its label, unit, and place in `Config`.
+/// One editable value: its label, unit, and field in `Config`.
 struct Setting {
     label: &'static str,
     unit: &'static str,
-    value: fn(&mut Config) -> &mut f64,
+    field: &'static ConfigField,
 }
 
 const TRIMS: [Setting; 4] = [
     Setting {
         label: "Left",
         unit: "mm",
-        value: |c| &mut c.trim_long_a_mm,
+        field: &TRIM_LONG_A,
     },
     Setting {
         label: "Right",
         unit: "mm",
-        value: |c| &mut c.trim_long_b_mm,
+        field: &TRIM_LONG_B,
     },
     Setting {
         label: "Top",
         unit: "mm",
-        value: |c| &mut c.trim_short_a_mm,
+        field: &TRIM_SHORT_A,
     },
     Setting {
         label: "Bottom",
         unit: "mm",
-        value: |c| &mut c.trim_short_b_mm,
+        field: &TRIM_SHORT_B,
     },
 ];
 
@@ -55,23 +58,23 @@ const CANVAS: [Setting; 3] = [
     Setting {
         label: "Long side",
         unit: "mm",
-        value: |c| &mut c.canvas_long_mm,
+        field: &CANVAS_LONG,
     },
     Setting {
         label: "Short side",
         unit: "mm",
-        value: |c| &mut c.canvas_short_mm,
+        field: &CANVAS_SHORT,
     },
     Setting {
         label: "Largest stretch",
         unit: "%",
-        value: |c| &mut c.max_stretch_pct,
+        field: &MAX_STRETCH,
     },
 ];
 
 /// The body of the Config dialog; owns its inputs while it is open.
 pub struct ConfigPanel {
-    printer_path: PathBuf,
+    config: ConfigFile,
     theme: ThemeChoice,
     trims: Vec<Entity<InputState>>,
     canvas: Vec<Entity<InputState>>,
@@ -79,20 +82,24 @@ pub struct ConfigPanel {
 }
 
 impl ConfigPanel {
-    /// Starts from the window's current theme and the printer config file. A
-    /// file that cannot be read shows its error and starts from the defaults;
-    /// saving then replaces it.
-    pub fn new(theme: ThemeChoice, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let printer_path = config::default_path();
-        let (mut cfg, error) = match Config::load(&printer_path) {
-            Ok(cfg) => (cfg, None),
+    /// Starts from the window's current theme and the values in the printer
+    /// config file, without the env overrides. A file that cannot be read
+    /// shows its error and starts from the defaults; saving then replaces it.
+    pub fn new(
+        theme: ThemeChoice,
+        config: ConfigFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (cfg, error) = match config.load() {
+            Ok(loaded) => (loaded.saved, None),
             Err(err) => (
                 Config::default(),
                 Some(format!("{} Saving replaces the file.", error_sentence(&err)).into()),
             ),
         };
         let mut input = |setting: &Setting| {
-            let value = *(setting.value)(&mut cfg);
+            let value = setting.field.get(&cfg);
             cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(value.to_string())
@@ -103,7 +110,7 @@ impl ConfigPanel {
         let trims = TRIMS.iter().map(&mut input).collect();
         let canvas = CANVAS.iter().map(&mut input).collect();
         Self {
-            printer_path,
+            config,
             theme,
             trims,
             canvas,
@@ -116,8 +123,10 @@ impl ConfigPanel {
     pub fn save(&mut self, cx: &mut Context<Self>) -> Option<ThemeChoice> {
         let appearance = Appearance { theme: self.theme };
         let result = self.read(cx).and_then(|cfg| {
-            cfg.save(&self.printer_path)
-                .and_then(|()| appearance.save(&appearance::default_path()))
+            let gui_path = self.config.sibling(appearance::FILE_NAME);
+            self.config
+                .save(&cfg)
+                .and_then(|()| toml_file::save(&gui_path, "", &appearance))
                 .map_err(|err| format!("Couldn't save. {}", error_sentence(&err)))
         });
         match result {
@@ -133,10 +142,10 @@ impl ConfigPanel {
     /// Puts the default values in every field. Nothing is written until
     /// Save.
     pub fn restore_defaults(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut cfg = Config::default();
+        let cfg = Config::default();
         let fields = TRIMS.iter().zip(&self.trims);
         for (setting, input) in fields.chain(CANVAS.iter().zip(&self.canvas)) {
-            let value = (setting.value)(&mut cfg).to_string();
+            let value = setting.field.get(&cfg).to_string();
             input.update(cx, |input, cx| input.set_value(value, window, cx));
         }
         self.theme = ThemeChoice::default();
@@ -149,7 +158,7 @@ impl ConfigPanel {
         let fields = TRIMS.iter().zip(&self.trims);
         for (setting, input) in fields.chain(CANVAS.iter().zip(&self.canvas)) {
             let text = input.read(cx).value();
-            *(setting.value)(&mut cfg) = text
+            *setting.field.get_mut(&mut cfg) = text
                 .trim()
                 .parse()
                 .map_err(|_| format!("{} must be a number.", setting.label))?;
@@ -195,7 +204,7 @@ impl ConfigPanel {
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child(self.printer_path.display().to_string()),
+                    .child(self.config.path().display().to_string()),
             );
         section("Printer", cx.theme().border, groups.into_any_element())
     }

@@ -19,9 +19,10 @@ use gpui_kit::{
     Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 
-use selphy::config::{self, Config};
+use selphy::config::ConfigFile;
 use selphy::prepare::{self, Job, Options};
 use selphy::report::{error_chain, sentence};
+use selphy::toml_file;
 
 use crate::appearance::{self, Appearance, ThemeChoice};
 use crate::batch::{Batch, Photo, Status};
@@ -39,6 +40,8 @@ pub struct BatchView {
     batch: Batch,
     out_dir: Option<PathBuf>,
     summary: Option<Summary>,
+    /// The printer config file, found once when the window opened.
+    config: ConfigFile,
     theme: ThemeChoice,
     /// The run in progress. Dropping it stops the run after the current photo.
     run: Option<Task<()>>,
@@ -49,8 +52,9 @@ pub struct BatchView {
 }
 
 impl BatchView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (theme, load_error) = match Appearance::load(&appearance::default_path()) {
+    pub fn new(config: ConfigFile, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let gui_path = config.sibling(appearance::FILE_NAME);
+        let (theme, load_error) = match toml_file::load_or_default::<Appearance>(&gui_path) {
             Ok(appearance) => (appearance.theme, None),
             Err(err) => (ThemeChoice::default(), Some(error_sentence(&err))),
         };
@@ -72,6 +76,7 @@ impl BatchView {
             batch: Batch::default(),
             out_dir: default_out_dir(),
             summary: None,
+            config,
             theme,
             run: None,
             cancelling: false,
@@ -169,7 +174,7 @@ impl BatchView {
     }
 
     fn open_config(&mut self, _: &OpenConfig, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = cx.new(|cx| ConfigPanel::new(self.theme, window, cx));
+        let panel = cx.new(|cx| ConfigPanel::new(self.theme, self.config.clone(), window, cx));
         let view = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
             let (panel_on_ok, view) = (panel.clone(), view.clone());
@@ -264,12 +269,13 @@ impl BatchView {
     }
 
     /// The job for a run into the chosen folder, with the config file read
-    /// afresh. Sources stay in place and no camera reference is used, as the
-    /// README says. Shows why and returns `None` when it cannot be built.
+    /// afresh and the env overrides applied, as `selphy prepare` does.
+    /// Sources stay in place and no camera reference is used, as the README
+    /// says. Shows why and returns `None` when it cannot be built.
     fn job(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Job> {
         let out_dir = self.out_dir.clone()?;
-        let cfg = match Config::load(&config::default_path()) {
-            Ok(cfg) => cfg,
+        let cfg = match self.config.load() {
+            Ok(loaded) => loaded.effective,
             Err(err) => {
                 let message = format!("{} Fix it in Config.", error_sentence(&err));
                 show_error(
