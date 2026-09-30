@@ -6,10 +6,11 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::atomic;
+use crate::geometry::mm_to_px;
 
 /// Trims are millimetres of canvas the printer loses on each edge in
 /// Borderless mode. They are named for the LANDSCAPE canvas: long A is the
@@ -55,23 +56,83 @@ const HEADER: &str = "\
 
 impl Config {
     /// Reads the config at `path`. A missing file gives the defaults; keys
-    /// missing from the file take their default value.
+    /// missing from the file take their default value. Values that
+    /// [`validate`](Self::validate) rejects are an error.
     pub fn load(path: &Path) -> Result<Self> {
-        match fs::read_to_string(path) {
+        let cfg: Self = match fs::read_to_string(path) {
             Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+                toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
             }
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+            Err(e) if e.kind() == ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        cfg.validate()
+            .with_context(|| format!("checking {}", path.display()))?;
+        Ok(cfg)
     }
 
+    /// Writes the config to `path`, creating its folder. Values that
+    /// [`validate`](Self::validate) rejects are an error, and nothing is
+    /// written.
     pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         let body = toml::to_string_pretty(self)?;
         atomic::write(path, format!("{HEADER}{body}"))
+    }
+
+    /// Checks that the values describe a printable canvas: the canvas sides
+    /// are more than 0, the trims and the stretch are 0 or more, and on each
+    /// side the two trims leave at least one pixel.
+    pub fn validate(&self) -> Result<()> {
+        let positive = [
+            ("canvas_long_mm", self.canvas_long_mm),
+            ("canvas_short_mm", self.canvas_short_mm),
+        ];
+        for (key, value) in positive {
+            ensure!(
+                value.is_finite() && value > 0.0,
+                "{key} = {value}: must be more than 0"
+            );
+        }
+        let non_negative = [
+            ("trim_long_a_mm", self.trim_long_a_mm),
+            ("trim_long_b_mm", self.trim_long_b_mm),
+            ("trim_short_a_mm", self.trim_short_a_mm),
+            ("trim_short_b_mm", self.trim_short_b_mm),
+            ("max_stretch_pct", self.max_stretch_pct),
+        ];
+        for (key, value) in non_negative {
+            ensure!(
+                value.is_finite() && value >= 0.0,
+                "{key} = {value}: must be 0 or more"
+            );
+        }
+        let sides = [
+            (
+                "long",
+                self.canvas_long_mm,
+                self.trim_long_a_mm,
+                self.trim_long_b_mm,
+            ),
+            (
+                "short",
+                self.canvas_short_mm,
+                self.trim_short_a_mm,
+                self.trim_short_b_mm,
+            ),
+        ];
+        for (side, canvas, a, b) in sides {
+            ensure!(
+                mm_to_px(canvas) - mm_to_px(a) - mm_to_px(b) >= 1,
+                "trim_{side}_a_mm + trim_{side}_b_mm = {} mm leaves nothing of the \
+                 {canvas} mm canvas_{side}_mm",
+                a + b
+            );
+        }
+        Ok(())
     }
 }
 
@@ -121,6 +182,50 @@ mod tests {
         let cfg = Config::load(&path).unwrap();
         assert_eq!(cfg.trim_long_a_mm, 4.0);
         assert_eq!(cfg.trim_long_b_mm, Config::default().trim_long_b_mm);
+    }
+
+    #[test]
+    fn values_that_break_the_layout_are_rejected() {
+        let cases = [
+            (
+                "canvas_short_mm = -5.0",
+                "canvas_short_mm = -5: must be more than 0",
+            ),
+            (
+                "canvas_long_mm = nan",
+                "canvas_long_mm = NaN: must be more than 0",
+            ),
+            ("trim_top_mm = 1.0", "trim_top_mm"),
+            (
+                "trim_short_a_mm = -0.1",
+                "trim_short_a_mm = -0.1: must be 0 or more",
+            ),
+            (
+                "max_stretch_pct = -200.0",
+                "max_stretch_pct = -200: must be 0 or more",
+            ),
+            (
+                "trim_long_a_mm = 200.0",
+                "leaves nothing of the 150 mm canvas_long_mm",
+            ),
+        ];
+        for (i, (text, reason)) in cases.into_iter().enumerate() {
+            let path = temp_path(&format!("invalid-{i}"));
+            fs::write(&path, format!("{text}\n")).unwrap();
+            let err = Config::load(&path).unwrap_err();
+            assert!(format!("{err:#}").contains(reason), "{text}: {err:#}");
+        }
+    }
+
+    #[test]
+    fn invalid_values_are_not_saved() {
+        let path = temp_path("save-invalid");
+        let cfg = Config {
+            trim_short_a_mm: 99.0,
+            ..Config::default()
+        };
+        assert!(cfg.save(&path).is_err());
+        assert!(!path.exists());
     }
 
     #[test]

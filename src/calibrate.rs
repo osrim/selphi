@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use image::{Rgb, RgbImage, imageops};
 use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, text_size};
 use imageproc::rect::Rect;
@@ -26,6 +26,8 @@ pub const CANDIDATES_MM: [f64; 9] = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5
 pub const DEFAULT_FONT: &str = "/System/Library/Fonts/Supplemental/Arial.ttf";
 
 const LINE_PX: i64 = 4;
+/// Space between a line and the ends of its slot.
+const SLOT_GAP_PX: i64 = 8;
 const LABEL_PX: f32 = 30.0;
 const NOTE_PX: f32 = 34.0;
 const WHITE: Rgb<u8> = Rgb([255, 255, 255]);
@@ -44,7 +46,7 @@ pub fn write_sheet(
     font: &FontVec,
     path: &Path,
 ) -> Result<()> {
-    let jpeg = imaging::encode_plain_jpeg(&sheet(cfg, orientation, font), SHEET_QUALITY)?;
+    let jpeg = imaging::encode_plain_jpeg(&sheet(cfg, orientation, font)?, SHEET_QUALITY)?;
     atomic::write(path, jpeg)
 }
 
@@ -54,20 +56,33 @@ pub fn load_font(path: &Path) -> Result<FontVec> {
 }
 
 /// Draws the bracket sheet for `orientation`, at the configured canvas size.
-pub fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> RgbImage {
+/// Fails if the canvas is too small to hold a slot per candidate.
+pub fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<RgbImage> {
     let canvas = Canvas::new(cfg, orientation);
     let (w, h) = (canvas.width, canvas.height);
-    let mut img = RgbImage::from_pixel(px(w), px(h), WHITE);
 
     // The slots share the middle 76% of each edge.
     let (h_start, h_step) = slots(w);
     let (v_start, v_step) = slots(h);
+    ensure!(
+        h_step.min(v_step) > 2 * SLOT_GAP_PX,
+        "the {:.1}x{:.1}mm canvas is too small for the calibration sheet",
+        cfg.canvas_long_mm,
+        cfg.canvas_short_mm
+    );
+    let mut img = RgbImage::from_pixel(px(w), px(h), WHITE);
     for (k, &mm) in CANDIDATES_MM.iter().enumerate() {
         let d = mm_to_px(mm);
         let colour = LINE_COLOURS[k % 2];
         let k = k as i64;
-        let (x0, x1) = (h_start + k * h_step + 8, h_start + (k + 1) * h_step - 8);
-        let (y0, y1) = (v_start + k * v_step + 8, v_start + (k + 1) * v_step - 8);
+        let (x0, x1) = (
+            h_start + k * h_step + SLOT_GAP_PX,
+            h_start + (k + 1) * h_step - SLOT_GAP_PX,
+        );
+        let (y0, y1) = (
+            v_start + k * v_step + SLOT_GAP_PX,
+            v_start + (k + 1) * v_step - SLOT_GAP_PX,
+        );
 
         // Each line's outer side is exactly d pixels from its edge.
         fill(&mut img, x0, d, x1 - x0, LINE_PX, colour);
@@ -98,7 +113,7 @@ pub fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> RgbImage
     for (i, note) in notes.iter().enumerate() {
         centred(&mut img, font, note, w / 2, h / 2 - 60 + 50 * i as i64);
     }
-    img
+    Ok(img)
 }
 
 /// The config after reading a printed sheet: for each edge, the smallest
@@ -191,7 +206,7 @@ mod tests {
         let cfg = Config::default();
         let font = arial();
         for orientation in [Orientation::Landscape, Orientation::Portrait] {
-            let img = sheet(&cfg, orientation, &font);
+            let img = sheet(&cfg, orientation, &font).unwrap();
             let (w, h) = (i64::from(img.width()), i64::from(img.height()));
             let (h_start, h_step) = slots(w);
             let (v_start, v_step) = slots(h);
@@ -218,10 +233,22 @@ mod tests {
     #[test]
     fn sheet_matches_the_canvas_and_has_labels() {
         let cfg = Config::default();
-        let img = sheet(&cfg, Orientation::Portrait, &arial());
+        let img = sheet(&cfg, Orientation::Portrait, &arial()).unwrap();
         assert_eq!((img.width(), img.height()), (1181, 1772));
         let dark = img.pixels().filter(|p| p.0 == BLACK.0).count();
         assert!(dark > 1000, "labels are drawn ({dark} black pixels)");
+    }
+
+    #[test]
+    fn a_canvas_too_small_for_the_slots_is_an_error() {
+        let cfg = Config {
+            canvas_short_mm: 10.0,
+            trim_short_a_mm: 1.0,
+            trim_short_b_mm: 1.0,
+            ..Config::default()
+        };
+        let err = sheet(&cfg, Orientation::Landscape, &arial()).unwrap_err();
+        assert!(format!("{err:#}").contains("too small"), "{err:#}");
     }
 
     #[test]

@@ -166,7 +166,9 @@ prepare the photo again. The prompts need a terminal.
 The config file is `~/.config/selphy/printer.toml`. `$XDG_CONFIG_HOME` moves
 it, and `$SELPHY_CONFIG` names the file directly. Without a file, the
 defaults below apply. Keys left out of the file take their default; unknown
-keys are an error.
+keys are an error. So are values that leave nothing to print on: a canvas
+side of 0 or less, a negative trim or stretch, or two trims that together
+cover a canvas side.
 
 ```toml
 canvas_long_mm = 150.0   # the canvas sent to the printer, not 4x6 inch
