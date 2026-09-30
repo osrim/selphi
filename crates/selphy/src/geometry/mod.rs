@@ -5,4 +5,4 @@ mod canvas;
 mod placement;
 
 pub use canvas::{Canvas, Edge, Orientation, PPI, Trim, mm_to_px, px_to_mm};
-pub use placement::{Placement, place};
+pub use placement::{Fit, Placement, place};

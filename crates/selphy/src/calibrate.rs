@@ -15,8 +15,9 @@ use image::{Rgb, RgbImage, imageops};
 use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, text_size};
 use imageproc::rect::Rect;
 
-use crate::config::Config;
+use crate::config::Profile;
 use crate::geometry::{Canvas, Orientation, PPI, mm_to_px};
+use crate::paper::Paper;
 use crate::{atomic, imaging};
 
 /// The candidate trims, one keyline per edge each.
@@ -30,6 +31,9 @@ const LINE_PX: i64 = 4;
 const SLOT_GAP_PX: i64 = 8;
 const LABEL_PX: f32 = 30.0;
 const NOTE_PX: f32 = 34.0;
+/// Space kept free of notes at the left and right edges, for the side
+/// labels.
+const NOTE_MARGIN_PX: u32 = 130;
 const WHITE: Rgb<u8> = Rgb([255, 255, 255]);
 const BLACK: Rgb<u8> = Rgb([0, 0, 0]);
 const GREY: Rgb<u8> = Rgb([0x55, 0x55, 0x55]);
@@ -39,14 +43,17 @@ const LINE_COLOURS: [Rgb<u8>; 2] = [Rgb([0xC0, 0, 0]), Rgb([0, 0x60, 0xC0])];
 /// small labels stay crisp.
 const SHEET_QUALITY: u8 = 95;
 
-/// Draws the sheet and writes it to `path` as a JPEG.
+/// Draws the sheet for `paper` at its `profile`'s canvas, and writes it to
+/// `path` as a JPEG.
 pub fn write_sheet(
-    cfg: &Config,
+    paper: Paper,
+    profile: &Profile,
     orientation: Orientation,
     font: &FontVec,
     path: &Path,
 ) -> Result<()> {
-    let jpeg = imaging::encode_plain_jpeg(&sheet(cfg, orientation, font)?, SHEET_QUALITY)?;
+    let jpeg =
+        imaging::encode_plain_jpeg(&sheet(paper, profile, orientation, font)?, SHEET_QUALITY)?;
     atomic::write(path, jpeg)
 }
 
@@ -56,10 +63,16 @@ pub fn load_font(path: &Path) -> Result<FontVec> {
     FontVec::try_from_vec(bytes).with_context(|| format!("{} is not a font", path.display()))
 }
 
-/// Draws the bracket sheet for `orientation`, at the configured canvas size.
-/// Fails if the canvas is too small to hold a slot per candidate.
-fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<RgbImage> {
-    let canvas = Canvas::new(cfg, orientation);
+/// Draws the bracket sheet for `orientation`, at the profile's canvas size.
+/// The note names `paper`. Fails if the canvas is too small to hold a slot
+/// per candidate.
+fn sheet(
+    paper: Paper,
+    profile: &Profile,
+    orientation: Orientation,
+    font: &FontVec,
+) -> Result<RgbImage> {
+    let canvas = Canvas::new(profile, orientation);
     let (w, h) = (canvas.width, canvas.height);
 
     // The slots share the middle 76% of each edge.
@@ -68,8 +81,8 @@ fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<RgbIm
     ensure!(
         h_step.min(v_step) > 2 * SLOT_GAP_PX,
         "the {:.1}x{:.1}mm canvas is too small for the calibration sheet",
-        cfg.canvas_long_mm,
-        cfg.canvas_short_mm
+        profile.canvas_long_mm,
+        profile.canvas_short_mm
     );
     let mut img = RgbImage::from_pixel(px(w), px(h), WHITE);
     for (k, &mm) in CANDIDATES_MM.iter().enumerate() {
@@ -108,21 +121,44 @@ fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<RgbIm
         text_upward(&mut img, font, &label, w - d - inset, y1 - 4);
     }
 
-    let notes = [
+    for (i, note) in notes(paper, profile, orientation).iter().enumerate() {
+        let size = note_size(font, note, w);
+        centred(
+            &mut img,
+            font,
+            note,
+            size,
+            (w / 2, h / 2 - 60 + 50 * i as i64),
+        );
+    }
+    Ok(img)
+}
+
+/// The lines of text in the middle of the sheet.
+fn notes(paper: Paper, profile: &Profile, orientation: Orientation) -> [String; 4] {
+    [
         format!(
-            "SELPHY trim bracket · {:.1}x{:.1}mm @ {PPI}ppi · {}",
-            cfg.canvas_long_mm,
-            cfg.canvas_short_mm,
+            "SELPHY trim bracket · {paper} · {:.1}x{:.1}mm @ {PPI}ppi · {}",
+            profile.canvas_long_mm,
+            profile.canvas_short_mm,
             orientation.name()
         ),
         "print Borderless, tear the tabs".to_string(),
         "per edge: find the SMALLEST number whose line still shows".to_string(),
         "that number is the trim on that edge".to_string(),
-    ];
-    for (i, note) in notes.iter().enumerate() {
-        centred(&mut img, font, note, w / 2, h / 2 - 60 + 50 * i as i64);
+    ]
+}
+
+/// The font size for `note` on a canvas `width` px wide: [`NOTE_PX`], or
+/// less when the note would reach the side labels.
+fn note_size(font: &FontVec, note: &str, width: i64) -> f32 {
+    let room = (width - 2 * i64::from(NOTE_MARGIN_PX)) as f32;
+    let full = text_size(NOTE_PX, font, note).0 as f32;
+    if full <= room {
+        return NOTE_PX;
     }
-    Ok(img)
+    // Text width grows with the size; round down so that it fits.
+    (NOTE_PX * room / full).floor()
 }
 
 /// Start and step of nine equal slots across the middle 76% of `span`.
@@ -167,11 +203,12 @@ fn text_upward(img: &mut RgbImage, font: &FontVec, s: &str, baseline: i64, botto
     );
 }
 
-fn centred(img: &mut RgbImage, font: &FontVec, s: &str, cx: i64, cy: i64) {
-    let (width, height) = text_size(NOTE_PX, font, s);
+/// Note text of `size` px, centred on `(cx, cy)`.
+fn centred(img: &mut RgbImage, font: &FontVec, s: &str, size: f32, (cx, cy): (i64, i64)) {
+    let (width, height) = text_size(size, font, s);
     let x = cx - i64::from(width) / 2;
     let y = cy - i64::from(height) / 2;
-    draw_text_mut(img, GREY, x as i32, y as i32, NOTE_PX, font, s);
+    draw_text_mut(img, GREY, x as i32, y as i32, size, font, s);
 }
 
 /// Copies the dark parts of `stamp` onto `img` at (x, y): each channel keeps
@@ -193,6 +230,7 @@ fn darken(img: &mut RgbImage, stamp: &RgbImage, x: i64, y: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::postcard;
 
     fn arial() -> FontVec {
         load_font(Path::new(DEFAULT_FONT)).expect("macOS ships Arial")
@@ -200,10 +238,10 @@ mod tests {
 
     #[test]
     fn each_line_starts_exactly_its_distance_from_the_edge() {
-        let cfg = Config::default();
+        let profile = postcard();
         let font = arial();
         for orientation in [Orientation::Landscape, Orientation::Portrait] {
-            let img = sheet(&cfg, orientation, &font).unwrap();
+            let img = sheet(Paper::Postcard, &profile, orientation, &font).unwrap();
             let (w, h) = (i64::from(img.width()), i64::from(img.height()));
             let (h_start, h_step) = slots(w);
             let (v_start, v_step) = slots(h);
@@ -229,8 +267,8 @@ mod tests {
 
     #[test]
     fn sheet_matches_the_canvas_and_has_labels() {
-        let cfg = Config::default();
-        let img = sheet(&cfg, Orientation::Portrait, &arial()).unwrap();
+        let profile = postcard();
+        let img = sheet(Paper::Postcard, &profile, Orientation::Portrait, &arial()).unwrap();
         assert_eq!((img.width(), img.height()), (1181, 1772));
         let dark = img.pixels().filter(|p| p.0 == BLACK.0).count();
         assert!(dark > 1000, "labels are drawn ({dark} black pixels)");
@@ -238,20 +276,27 @@ mod tests {
 
     #[test]
     fn a_canvas_too_small_for_the_slots_is_an_error() {
-        let cfg = Config {
+        let profile = Profile {
             canvas_short_mm: 10.0,
             trim_short_a_mm: 1.0,
             trim_short_b_mm: 1.0,
-            ..Config::default()
+            ..postcard()
         };
-        let err = sheet(&cfg, Orientation::Landscape, &arial()).unwrap_err();
+        let err = sheet(Paper::Postcard, &profile, Orientation::Landscape, &arial()).unwrap_err();
         assert!(format!("{err:#}").contains("too small"), "{err:#}");
     }
 
     #[test]
     fn write_sheet_writes_a_readable_jpeg() {
         let path = crate::test_util::fresh_dir("sheet").join("calibration.jpg");
-        write_sheet(&Config::default(), Orientation::Landscape, &arial(), &path).unwrap();
+        write_sheet(
+            Paper::Postcard,
+            &postcard(),
+            Orientation::Landscape,
+            &arial(),
+            &path,
+        )
+        .unwrap();
         let written = image::open(&path).unwrap();
         assert_eq!((written.width(), written.height()), (1772, 1181));
     }
@@ -262,5 +307,45 @@ mod tests {
         fs::write(&path, b"nope").unwrap();
         let err = load_font(&path).err().unwrap();
         assert!(format!("{err:#}").contains("is not a font"), "{err:#}");
+    }
+
+    #[test]
+    fn a_card_sheet_is_drawn_at_the_card_canvas() {
+        let dir = crate::test_util::fresh_dir("sheet-card");
+        let card = Paper::Card.starting_profile();
+        for orientation in Orientation::ALL {
+            let path = dir.join(format!("{}.jpg", orientation.name()));
+            write_sheet(Paper::Card, &card, orientation, &arial(), &path).unwrap();
+            let written = image::open(&path).unwrap();
+            let canvas = Canvas::new(&card, orientation);
+            assert_eq!(
+                (i64::from(written.width()), i64::from(written.height())),
+                (canvas.width, canvas.height)
+            );
+        }
+    }
+
+    #[test]
+    fn the_notes_fit_between_the_side_labels_on_every_paper() {
+        let font = arial();
+        let longest = notes(Paper::Postcard, &postcard(), Orientation::Portrait)
+            .into_iter()
+            .max_by_key(|note| text_size(NOTE_PX, &font, note).0)
+            .unwrap();
+        for paper in Paper::ALL {
+            let profile = paper.starting_profile();
+            for orientation in Orientation::ALL {
+                let w = Canvas::new(&profile, orientation).width;
+                let room = w - 2 * i64::from(NOTE_MARGIN_PX);
+                for note in notes(paper, &profile, orientation) {
+                    let size = note_size(&font, &note, w);
+                    let width = i64::from(text_size(size, &font, &note).0);
+                    assert!(width <= room, "{paper} {orientation:?}: {note}");
+                    assert!(size <= NOTE_PX);
+                }
+            }
+        }
+        // A wide canvas keeps the full size.
+        assert_eq!(note_size(&font, &longest, 1772), NOTE_PX);
     }
 }

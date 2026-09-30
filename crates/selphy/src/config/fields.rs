@@ -1,32 +1,32 @@
-//! The one list of `Config` fields: each field's TOML key, its env var, and
-//! where it lives in `Config`. The env overrides go over [`FIELDS`], and
+//! The one list of `Profile` fields: each field's TOML key, its env var, and
+//! where it lives in `Profile`. The env overrides go over [`FIELDS`], and
 //! `Trim` and the GUI's inputs reach their fields through it, so a new field
 //! is added here and nowhere else.
 
-use super::Config;
+use super::Profile;
 use crate::geometry::Trim;
 
-/// One `f64` field of [`Config`].
+/// One `f64` field of [`Profile`].
 #[derive(Debug)]
 pub struct Field {
-    /// The TOML key, which is also the field's name in `Config`.
+    /// The TOML key, which is also the field's name in `Profile`.
     pub key: &'static str,
     /// The env var that overrides the field: `SELPHY_` and the key in upper
     /// case.
     pub env: &'static str,
-    get: fn(&Config) -> f64,
-    get_mut: fn(&mut Config) -> &mut f64,
+    get: fn(&Profile) -> f64,
+    get_mut: fn(&mut Profile) -> &mut f64,
 }
 
 impl Field {
-    /// The field's value in `cfg`.
-    pub fn get(&self, cfg: &Config) -> f64 {
-        (self.get)(cfg)
+    /// The field's value in `profile`.
+    pub fn get(&self, profile: &Profile) -> f64 {
+        (self.get)(profile)
     }
 
-    /// The field in `cfg`, for writing.
-    pub fn get_mut<'a>(&self, cfg: &'a mut Config) -> &'a mut f64 {
-        (self.get_mut)(cfg)
+    /// The field in `profile`, for writing.
+    pub fn get_mut<'a>(&self, profile: &'a mut Profile) -> &'a mut f64 {
+        (self.get_mut)(profile)
     }
 
     /// The field that holds `trim`.
@@ -97,7 +97,7 @@ pub const MAX_STRETCH: Field = Field {
     get_mut: |c| &mut c.max_stretch_pct,
 };
 
-/// Every field, in the order of `Config`.
+/// Every field, in the order of `Profile`.
 pub const FIELDS: [&Field; 7] = [
     &CANVAS_LONG,
     &CANVAS_SHORT,
@@ -110,13 +110,14 @@ pub const FIELDS: [&Field; 7] = [
 
 #[cfg(test)]
 mod tests {
+    use crate::test_util::postcard;
     use std::collections::BTreeSet;
 
     use super::*;
 
     #[test]
-    fn every_config_field_has_one_entry_and_a_unique_env_var() {
-        let text = toml::to_string(&Config::default()).unwrap();
+    fn every_profile_field_has_one_entry_and_a_unique_env_var() {
+        let text = toml::to_string(&postcard()).unwrap();
         let table: toml::Table = toml::from_str(&text).unwrap();
         let keys: BTreeSet<&str> = table.keys().map(String::as_str).collect();
         let listed: BTreeSet<&str> = FIELDS.iter().map(|f| f.key).collect();
@@ -138,11 +139,11 @@ mod tests {
     #[test]
     fn each_field_reads_and_writes_its_key() {
         for (i, field) in FIELDS.into_iter().enumerate() {
-            let mut cfg = Config::default();
+            let mut profile = postcard();
             let value = 100.0 + i as f64;
-            *field.get_mut(&mut cfg) = value;
-            assert_eq!(field.get(&cfg), value);
-            let table: toml::Table = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+            *field.get_mut(&mut profile) = value;
+            assert_eq!(field.get(&profile), value);
+            let table: toml::Table = toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
             assert_eq!(table[field.key].as_float(), Some(value), "{}", field.key);
         }
     }

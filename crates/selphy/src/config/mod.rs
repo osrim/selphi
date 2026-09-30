@@ -1,7 +1,7 @@
-//! The printer's measured geometry and the layout limits. [`ConfigFile`]
-//! stores them as TOML at `~/.config/selphy/printer.toml`. A missing file
-//! means "use the defaults", which are the values measured on the first
-//! SELPHY CP1500 this ran on.
+//! The printer config: the default paper and one [`Profile`] per calibrated
+//! paper. [`ConfigFile`] stores it as TOML at
+//! `~/.config/selphy/printer.toml`. A missing file means "use the defaults":
+//! postcard, with the values measured on the first SELPHY CP1500 this ran on.
 
 use std::fmt;
 
@@ -11,19 +11,154 @@ use serde::{Deserialize, Serialize};
 pub mod fields;
 mod file;
 
-pub use file::{ConfigFile, Loaded, Override};
+use fields::Field;
+
+pub use file::{ConfigFile, Loaded, Override, PAPER_ENV};
 
 use crate::geometry::{Edge, Orientation, Trim, mm_to_px};
+use crate::paper::Paper;
 
+/// The config file: the default paper, and a table for each calibrated
+/// paper. A paper without a table uses [`Paper::default_profile`].
+///
+/// Keys missing from a table take their value from the paper's
+/// [`Paper::starting_profile`], except that a paper with no built-in
+/// profile must have all four trims. Unknown keys are an error.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RawConfig")]
+pub struct Config {
+    /// The paper to use when none is named on the command line or in
+    /// `SELPHY_PAPER`. `None` means postcard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paper: Option<Paper>,
+    /// The `[postcard]` table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postcard: Option<Profile>,
+    /// The `[l]` table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l: Option<Profile>,
+    /// The `[card]` table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<Profile>,
+}
+
+impl Config {
+    /// The profile of `paper`: its table, else its built-in profile. `None`
+    /// when the paper is not calibrated.
+    pub fn profile(&self, paper: Paper) -> Option<Profile> {
+        self.table(paper)
+            .clone()
+            .or_else(|| paper.default_profile())
+    }
+
+    /// This config with `profile` as the table of `paper`. The other tables
+    /// are kept.
+    pub fn with_profile(&self, paper: Paper, profile: Profile) -> Config {
+        let mut updated = self.clone();
+        *updated.table_mut(paper) = Some(profile);
+        updated
+    }
+
+    /// Checks each table with [`Profile::validate`]. An error names the
+    /// table, as in `[l] trim_long_a_mm = -1: must be 0 or more`.
+    pub fn validate(&self) -> Result<()> {
+        for paper in Paper::ALL {
+            if let Some(profile) = self.table(paper) {
+                profile
+                    .validate()
+                    .map_err(|invalid| anyhow!("[{paper}] {invalid}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn table(&self, paper: Paper) -> &Option<Profile> {
+        match paper {
+            Paper::Postcard => &self.postcard,
+            Paper::L => &self.l,
+            Paper::Card => &self.card,
+        }
+    }
+
+    fn table_mut(&mut self, paper: Paper) -> &mut Option<Profile> {
+        match paper {
+            Paper::Postcard => &mut self.postcard,
+            Paper::L => &mut self.l,
+            Paper::Card => &mut self.card,
+        }
+    }
+}
+
+/// The file as written, before each table is filled in from its paper's
+/// starting profile.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawConfig {
+    paper: Option<Paper>,
+    postcard: Option<toml::Table>,
+    l: Option<toml::Table>,
+    card: Option<toml::Table>,
+}
+
+impl TryFrom<RawConfig> for Config {
+    type Error = String;
+
+    fn try_from(raw: RawConfig) -> Result<Self, String> {
+        let mut config = Config {
+            paper: raw.paper,
+            ..Config::default()
+        };
+        let tables = [
+            (Paper::Postcard, raw.postcard),
+            (Paper::L, raw.l),
+            (Paper::Card, raw.card),
+        ];
+        for (paper, table) in tables {
+            let Some(table) = table else { continue };
+            let profile = fill_in(paper, table).map_err(|err| format!("[{paper}] {err}"))?;
+            *config.table_mut(paper) = Some(profile);
+        }
+        Ok(config)
+    }
+}
+
+/// The profile in `table`, with each missing key taken from the starting
+/// profile of `paper`. A paper with no built-in profile must have all four
+/// trims in its table, so that no trim is guessed.
+fn fill_in(paper: Paper, table: toml::Table) -> Result<Profile, String> {
+    if paper.default_profile().is_none() {
+        let missing = Trim::ALL
+            .map(|trim| Field::for_trim(trim).key)
+            .into_iter()
+            .find(|key| !table.contains_key(*key));
+        if let Some(key) = missing {
+            return Err(format!(
+                "{key} is missing: {paper} paper has no built-in trims. Run: selphy calibrate \
+                 --paper {paper}"
+            ));
+        }
+    }
+    let mut merged =
+        toml::Table::try_from(paper.starting_profile()).expect("a profile serialises to a table");
+    merged.extend(table);
+    toml::Value::Table(merged)
+        .try_into()
+        .map_err(|err: toml::de::Error| err.to_string())
+}
+
+/// One paper's printer geometry: the canvas, the four trims, and the max
+/// stretch.
+///
 /// Trims are millimetres of canvas the printer loses on each edge in
 /// Borderless mode. They are named for the LANDSCAPE canvas: long A is the
 /// left end, long B the right end, short A the top edge, short B the bottom.
 /// `geometry` maps them onto a portrait canvas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Config {
-    /// The canvas handed to the printer. 150x100mm maps cleanly onto postcard
-    /// stock (100x148mm after the tabs are torn off). NOT 4x6 inch.
+#[serde(deny_unknown_fields)]
+pub struct Profile {
+    /// The canvas handed to the printer. It is bigger than the paper, because
+    /// the printer enlarges and trims. The postcard canvas is 150x100mm, NOT
+    /// 4x6 inch.
     pub canvas_long_mm: f64,
     /// The canvas's short side.
     pub canvas_short_mm: f64,
@@ -40,26 +175,12 @@ pub struct Config {
     pub max_stretch_pct: f64,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            canvas_long_mm: 150.0,
-            canvas_short_mm: 100.0,
-            trim_long_a_mm: 4.5,
-            trim_long_b_mm: 5.5,
-            trim_short_a_mm: 2.1,
-            trim_short_b_mm: 2.7,
-            max_stretch_pct: 2.5,
-        }
-    }
-}
-
-impl Config {
-    /// This config with the trim on each edge in `trims` set, mapped
+impl Profile {
+    /// This profile with the trim on each edge in `trims` set, mapped
     /// through [`Trim::at`] for `orientation`. Edges not in `trims` keep
     /// their trim. The result is validated, and a trim error names the edges
     /// of `orientation`, not the TOML keys.
-    pub fn with_trims(&self, orientation: Orientation, trims: &[(Edge, f64)]) -> Result<Config> {
+    pub fn with_trims(&self, orientation: Orientation, trims: &[(Edge, f64)]) -> Result<Profile> {
         let mut updated = self.clone();
         for &(edge, mm) in trims {
             *Trim::at(orientation, edge).mm_mut(&mut updated) = mm;
@@ -110,7 +231,7 @@ fn non_negative(value: f64) -> bool {
     value.is_finite() && value >= 0.0
 }
 
-/// The check that [`Config::validate`] failed, and the fields it failed on.
+/// The check that [`Profile::validate`] failed, and the fields it failed on.
 /// `Display` names the TOML keys, so that the user can fix the file.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Invalid {
@@ -226,11 +347,11 @@ impl Side {
         }
     }
 
-    /// The length of this side in `cfg`, in mm.
-    fn canvas_mm(self, cfg: &Config) -> f64 {
+    /// The length of this side in `profile`, in mm.
+    fn canvas_mm(self, profile: &Profile) -> f64 {
         match self {
-            Self::Long => cfg.canvas_long_mm,
-            Self::Short => cfg.canvas_short_mm,
+            Self::Long => profile.canvas_long_mm,
+            Self::Short => profile.canvas_short_mm,
         }
     }
 
@@ -246,9 +367,10 @@ impl Side {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::postcard;
     #[test]
     fn with_trims_sets_the_trims_on_the_named_edges() {
-        let before = Config::default();
+        let before = postcard();
         let trims = [
             (Edge::Left, 3.0),
             (Edge::Top, 4.0),
@@ -271,15 +393,15 @@ mod tests {
 
     #[test]
     fn with_trims_keeps_the_other_edges_and_leaves_self_alone() {
-        let before = Config::default();
+        let before = postcard();
         let after = before
             .with_trims(Orientation::Portrait, &[(Edge::Top, 3.5)])
             .unwrap();
-        assert_eq!(before, Config::default());
+        assert_eq!(before, postcard());
         // portrait top = long A
         assert_eq!(after.trim_long_a_mm, 3.5);
         assert_eq!(
-            Config {
+            Profile {
                 trim_long_a_mm: before.trim_long_a_mm,
                 ..after
             },
@@ -289,7 +411,7 @@ mod tests {
 
     #[test]
     fn with_trims_rejects_a_negative_trim_by_its_edge() {
-        let err = Config::default()
+        let err = postcard()
             .with_trims(Orientation::Landscape, &[(Edge::Bottom, -0.5)])
             .unwrap_err();
         assert_eq!(
@@ -300,7 +422,7 @@ mod tests {
 
     #[test]
     fn with_trims_rejects_trims_that_leave_nothing_by_their_edges() {
-        let err = Config::default()
+        let err = postcard()
             .with_trims(
                 Orientation::Portrait,
                 &[(Edge::Left, 50.0), (Edge::Right, 50.0)],

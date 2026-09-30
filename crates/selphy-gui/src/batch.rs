@@ -204,8 +204,8 @@ mod tests {
 
     #[test]
     fn a_prepared_row_starts_with_the_orientation() {
-        let cfg = selphy::config::Config::default();
-        let placement = selphy::geometry::place(&cfg, 1920, 1080).unwrap();
+        let profile = selphy::paper::Paper::Postcard.starting_profile();
+        let placement = selphy::geometry::place(&profile, 1920, 1080).unwrap();
         let done = Done {
             prepared: selphy::prepare::Prepared {
                 output: PathBuf::from("out/a-selphy.jpg"),

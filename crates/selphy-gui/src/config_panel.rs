@@ -1,5 +1,7 @@
 //! The Config dialog body: the window's Appearance, and the Printer values that
-//! `selphy` reads. Each section is a heading over groups of fields.
+//! `selphy` reads. Each section is a heading over groups of fields. The
+//! Printer values are the postcard profile; the other papers' tables are
+//! kept as they are.
 
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
@@ -18,13 +20,14 @@ use selphy::config::fields::{
     CANVAS_LONG, CANVAS_SHORT, Field as ConfigField, MAX_STRETCH, TRIM_LONG_A, TRIM_LONG_B,
     TRIM_SHORT_A, TRIM_SHORT_B,
 };
-use selphy::config::{Config, ConfigFile};
+use selphy::config::{Config, ConfigFile, Profile};
+use selphy::paper::Paper;
 use selphy::toml_file;
 
 use crate::appearance::{self, Appearance, ThemeChoice};
 use crate::batch_view::error_sentence;
 
-/// One editable value: its label, unit, and field in `Config`.
+/// One editable value: its label, unit, and field in `Profile`.
 struct Setting {
     label: &'static str,
     unit: &'static str,
@@ -75,6 +78,8 @@ const CANVAS: [Setting; 3] = [
 /// The body of the Config dialog; owns its inputs while it is open.
 pub struct ConfigPanel {
     config: ConfigFile,
+    /// The file as it was read. Save replaces its postcard table.
+    saved: Config,
     theme: ThemeChoice,
     trims: Vec<Entity<InputState>>,
     canvas: Vec<Entity<InputState>>,
@@ -82,24 +87,28 @@ pub struct ConfigPanel {
 }
 
 impl ConfigPanel {
-    /// Starts from the window's current theme and the values in the printer
-    /// config file, without the env overrides. A file that cannot be read
-    /// shows its error and starts from the defaults; saving then replaces it.
+    /// Starts from the window's current theme and the postcard values in the
+    /// printer config file, without the env overrides. A file that cannot be
+    /// read shows its error and starts from the defaults; saving then
+    /// replaces it.
     pub fn new(
         theme: ThemeChoice,
         config: ConfigFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (cfg, error) = match config.load() {
+        let (saved, error) = match config.load(None) {
             Ok(loaded) => (loaded.saved, None),
             Err(err) => (
                 Config::default(),
                 Some(format!("{} Saving replaces the file.", error_sentence(&err)).into()),
             ),
         };
+        let postcard = saved
+            .profile(Paper::Postcard)
+            .expect("postcard has a built-in profile");
         let mut input = |setting: &Setting| {
-            let value = setting.field.get(&cfg);
+            let value = setting.field.get(&postcard);
             cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(value.to_string())
@@ -111,6 +120,7 @@ impl ConfigPanel {
         let canvas = CANVAS.iter().map(&mut input).collect();
         Self {
             config,
+            saved,
             theme,
             trims,
             canvas,
@@ -122,10 +132,10 @@ impl ConfigPanel {
     /// shows why, when a value is not a number or a file cannot be written.
     pub fn save(&mut self, cx: &mut Context<Self>) -> Option<ThemeChoice> {
         let appearance = Appearance { theme: self.theme };
-        let result = self.read(cx).and_then(|cfg| {
+        let result = self.read(cx).and_then(|postcard| {
             let gui_path = self.config.sibling(appearance::FILE_NAME);
             self.config
-                .save(&cfg)
+                .save(&self.saved.with_profile(Paper::Postcard, postcard))
                 .and_then(|()| toml_file::save(&gui_path, "", &appearance))
                 .map_err(|err| format!("Couldn't save. {}", error_sentence(&err)))
         });
@@ -139,13 +149,13 @@ impl ConfigPanel {
         }
     }
 
-    /// Puts the default values in every field. Nothing is written until
+    /// Puts the postcard defaults in every field. Nothing is written until
     /// Save.
     pub fn restore_defaults(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let cfg = Config::default();
+        let postcard = Paper::Postcard.starting_profile();
         let fields = TRIMS.iter().zip(&self.trims);
         for (setting, input) in fields.chain(CANVAS.iter().zip(&self.canvas)) {
-            let value = setting.field.get(&cfg).to_string();
+            let value = setting.field.get(&postcard).to_string();
             input.update(cx, |input, cx| input.set_value(value, window, cx));
         }
         self.theme = ThemeChoice::default();
@@ -153,17 +163,18 @@ impl ConfigPanel {
         cx.notify();
     }
 
-    fn read(&self, cx: &Context<Self>) -> Result<Config, String> {
-        let mut cfg = Config::default();
+    /// The postcard profile in the fields.
+    fn read(&self, cx: &Context<Self>) -> Result<Profile, String> {
+        let mut postcard = Paper::Postcard.starting_profile();
         let fields = TRIMS.iter().zip(&self.trims);
         for (setting, input) in fields.chain(CANVAS.iter().zip(&self.canvas)) {
             let text = input.read(cx).value();
-            *setting.field.get_mut(&mut cfg) = text
+            *setting.field.get_mut(&mut postcard) = text
                 .trim()
                 .parse()
                 .map_err(|_| format!("{} must be a number.", setting.label))?;
         }
-        Ok(cfg)
+        Ok(postcard)
     }
 
     fn render_appearance(&self, cx: &mut Context<Self>) -> AnyElement {

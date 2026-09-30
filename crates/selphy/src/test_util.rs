@@ -3,6 +3,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::config::Profile;
+use crate::paper::Paper;
+
 /// An empty directory under the system temp dir, named for `name`. Anything
 /// left there by an earlier run is removed first, so runs do not pile up
 /// folders. Each test uses its own `name`.
@@ -37,4 +40,9 @@ pub fn write_jpeg(path: &Path, width: u16, height: u16, exif: &[u8]) -> PathBuf 
         .encode(&pixels, width, height, jpeg_encoder::ColorType::Rgb)
         .unwrap();
     path.to_path_buf()
+}
+
+/// The built-in postcard profile.
+pub fn postcard() -> Profile {
+    Paper::Postcard.starting_profile()
 }

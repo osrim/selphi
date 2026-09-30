@@ -1,7 +1,7 @@
 //! The canvas model: units, orientation, edges, and which measured trim
 //! lands on which edge.
 
-use crate::config::Config;
+use crate::config::Profile;
 use crate::config::fields::Field;
 
 /// Output resolution. The SELPHY prints at 300 dpi.
@@ -79,7 +79,7 @@ impl Edge {
     }
 }
 
-/// One of the four trims in `Config`, named for the landscape canvas.
+/// One of the four trims in `Profile`, named for the landscape canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trim {
     /// `trim_long_a_mm`: the landscape left end.
@@ -93,7 +93,7 @@ pub enum Trim {
 }
 
 impl Trim {
-    /// All four trims, in the order of their fields in `Config`.
+    /// All four trims, in the order of their fields in `Profile`.
     pub const ALL: [Trim; 4] = [Trim::LongA, Trim::LongB, Trim::ShortA, Trim::ShortB];
 
     /// The trim that lands on `edge` of a canvas in `orientation`. The printer
@@ -123,9 +123,9 @@ impl Trim {
             .expect("Trim::at puts every trim on one edge")
     }
 
-    /// This trim's value in `cfg`.
-    pub fn mm(self, cfg: &Config) -> f64 {
-        Field::for_trim(self).get(cfg)
+    /// This trim's value in `profile`.
+    pub fn mm(self, profile: &Profile) -> f64 {
+        Field::for_trim(self).get(profile)
     }
 
     /// The TOML key of this trim's field.
@@ -134,8 +134,8 @@ impl Trim {
     }
 
     /// The config field that holds this trim, for writing.
-    pub fn mm_mut(self, cfg: &mut Config) -> &mut f64 {
-        Field::for_trim(self).get_mut(cfg)
+    pub fn mm_mut(self, profile: &mut Profile) -> &mut f64 {
+        Field::for_trim(self).get_mut(profile)
     }
 }
 
@@ -158,14 +158,14 @@ pub struct Canvas {
 impl Canvas {
     /// The configured canvas in `orientation`, with each trim on the edge it
     /// lands on.
-    pub fn new(cfg: &Config, orientation: Orientation) -> Self {
-        let long = mm_to_px(cfg.canvas_long_mm);
-        let short = mm_to_px(cfg.canvas_short_mm);
+    pub fn new(profile: &Profile, orientation: Orientation) -> Self {
+        let long = mm_to_px(profile.canvas_long_mm);
+        let short = mm_to_px(profile.canvas_short_mm);
         let (width, height) = match orientation {
             Orientation::Landscape => (long, short),
             Orientation::Portrait => (short, long),
         };
-        let trim = |edge| mm_to_px(Trim::at(orientation, edge).mm(cfg));
+        let trim = |edge| mm_to_px(Trim::at(orientation, edge).mm(profile));
         Self {
             orientation,
             width,
@@ -210,6 +210,7 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::postcard;
 
     #[test]
     fn mm_to_px_rounds_to_the_nearest_pixel() {
@@ -242,17 +243,17 @@ mod tests {
 
     #[test]
     fn mm_mut_writes_the_field_mm_reads() {
-        let mut cfg = Config::default();
+        let mut profile = postcard();
         for (i, trim) in Trim::ALL.into_iter().enumerate() {
-            *trim.mm_mut(&mut cfg) = 10.0 + i as f64;
-            assert_eq!(trim.mm(&cfg), 10.0 + i as f64, "{trim:?}");
+            *trim.mm_mut(&mut profile) = 10.0 + i as f64;
+            assert_eq!(trim.mm(&profile), 10.0 + i as f64, "{trim:?}");
         }
     }
 
     #[test]
     fn portrait_mapping_matches_the_measured_print() {
-        let cfg = Config::default();
-        let trim = |edge| Trim::at(Orientation::Portrait, edge).mm(&cfg);
+        let profile = postcard();
+        let trim = |edge| Trim::at(Orientation::Portrait, edge).mm(&profile);
         // The portrait print showed 4.5mm lost at the top, 5.5mm at the bottom.
         assert_eq!(trim(Edge::Top), 4.5);
         assert_eq!(trim(Edge::Bottom), 5.5);
@@ -260,14 +261,14 @@ mod tests {
 
     #[test]
     fn landscape_canvas_and_safe_box() {
-        let c = Canvas::new(&Config::default(), Orientation::Landscape);
+        let c = Canvas::new(&postcard(), Orientation::Landscape);
         assert_eq!((c.width, c.height), (1772, 1181));
         assert_eq!((c.safe_width(), c.safe_height()), (1654, 1124));
     }
 
     #[test]
     fn portrait_canvas_swaps_sides_and_remaps_trims() {
-        let c = Canvas::new(&Config::default(), Orientation::Portrait);
+        let c = Canvas::new(&postcard(), Orientation::Portrait);
         assert_eq!((c.width, c.height), (1181, 1772));
         let trims = Edge::ALL.map(|edge| c.trim(edge));
         // left = short B 2.7mm, top = long A 4.5mm, right = short A 2.1mm,

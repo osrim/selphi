@@ -9,9 +9,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::atomic;
-use crate::config::Config;
+use crate::config::Profile;
 use crate::geometry::{self, Placement};
 use crate::imaging::{self, Source};
+use crate::paper::Paper;
 use crate::record::Record;
 
 mod archive;
@@ -29,24 +30,25 @@ pub struct Prepared {
     pub placement: Placement,
 }
 
-/// Prepares one photo and writes it to `out_dir/<name>-selphy.jpg`. The photo's own
+/// Prepares one photo for `paper` and writes it to `out_dir/<name>-selphy.jpg`. The photo's own
 /// Exif is not carried over: it names the editing software, which some
 /// printers reject, and its resolution tags contradict the 300 dpi header.
 /// `camera_exif`, when given, is written instead.
 fn prepare_one(
     source: &Path,
     out_dir: &Path,
-    cfg: &Config,
+    paper: Paper,
+    profile: &Profile,
     camera_exif: Option<&[u8]>,
 ) -> Result<Prepared> {
     let Source {
         image, icc_profile, ..
     } = imaging::load(source)?;
     let placement =
-        geometry::place(cfg, image.width(), image.height()).context("the image is empty")?;
+        geometry::place(profile, image.width(), image.height()).context("the image is empty")?;
     let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
     let sheet = imaging::render(&photo, &placement);
-    let record = Record::of(&placement);
+    let record = Record::of(paper, &placement);
     let jpeg = imaging::encode_jpeg(&sheet, camera_exif, &[record.segment()])?;
 
     let output = out_dir.join(output_name(source)?);
@@ -94,16 +96,19 @@ pub struct Done {
 /// thread.
 #[derive(Debug, Clone)]
 pub struct Job {
-    cfg: Config,
+    paper: Paper,
+    profile: Profile,
     opts: Options,
     camera_exif: Option<Arc<[u8]>>,
 }
 
 impl Job {
-    /// A job that prepares photos with `cfg` as `opts` says. Reads the camera
-    /// reference's Exif once, when one is given; an unreadable reference, or
-    /// one with no Exif, is an error, so that no photo gets the wrong Exif.
-    pub fn new(cfg: Config, opts: Options) -> Result<Self> {
+    /// A job that prepares photos for `paper` with its `profile`, as `opts`
+    /// says. The paper goes into each output's placement record. Reads the
+    /// camera reference's Exif once, when one is given; an unreadable
+    /// reference, or one with no Exif, is an error, so that no photo gets the
+    /// wrong Exif.
+    pub fn new(paper: Paper, profile: Profile, opts: Options) -> Result<Self> {
         let camera_exif = opts
             .camera_ref
             .as_deref()
@@ -111,7 +116,8 @@ impl Job {
             .transpose()?
             .map(Arc::from);
         Ok(Self {
-            cfg,
+            paper,
+            profile,
             opts,
             camera_exif,
         })
@@ -129,7 +135,8 @@ impl Job {
         let prepared = prepare_one(
             source,
             &self.opts.out_dir,
-            &self.cfg,
+            self.paper,
+            &self.profile,
             self.camera_exif.as_deref(),
         )?;
         let archived = match &self.opts.archive_dir {
@@ -156,6 +163,7 @@ fn camera_exif(path: &Path) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::postcard;
     use crate::test_util::{exif_with_orientation, fresh_dir, write_jpeg};
 
     /// Writes a 300x200 grey JPEG with the given Exif block, returns its path.
@@ -178,7 +186,7 @@ mod tests {
         let source = source_jpeg(&dir, "photo.v2.jpg", &exif_with_orientation(1));
         let out = dir.join("out");
 
-        let done = prepare_one(&source, &out, &Config::default(), None).unwrap();
+        let done = prepare_one(&source, &out, Paper::Postcard, &postcard(), None).unwrap();
         assert_eq!(done.output, out.join("photo.v2-selphy.jpg"));
         let written = image::open(&done.output).unwrap();
         assert_eq!((written.width(), written.height()), (1772, 1181));
@@ -198,7 +206,7 @@ mod tests {
             .chain(*b"camera")
             .collect::<Vec<u8>>();
 
-        let done = prepare_one(&source, &dir, &Config::default(), Some(&camera)).unwrap();
+        let done = prepare_one(&source, &dir, Paper::Postcard, &postcard(), Some(&camera)).unwrap();
         assert_eq!(exif_of(&done.output), Some(camera));
     }
 
@@ -208,7 +216,7 @@ mod tests {
         let bad = dir.join("broken.jpg");
         fs::write(&bad, b"not a jpeg").unwrap();
         let out = dir.join("out");
-        let err = prepare_one(&bad, &out, &Config::default(), None).unwrap_err();
+        let err = prepare_one(&bad, &out, Paper::Postcard, &postcard(), None).unwrap_err();
         assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
         assert!(!out.exists(), "nothing is written for a failed photo");
     }
@@ -222,7 +230,7 @@ mod tests {
     }
 
     fn job(dir: &Path, archive: bool) -> Job {
-        Job::new(Config::default(), options(dir, archive)).unwrap()
+        Job::new(Paper::Postcard, postcard(), options(dir, archive)).unwrap()
     }
 
     #[test]
@@ -285,7 +293,7 @@ mod tests {
             camera_ref: Some(camera),
             ..options(&dir, false)
         };
-        let job = Job::new(Config::default(), opts).unwrap();
+        let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
         for source in [a, b] {
             let output = job.run_one(&source).unwrap().prepared.output;
             assert_eq!(exif_of(&output), Some(exif_with_orientation(1)));
@@ -299,7 +307,7 @@ mod tests {
             camera_ref: Some(dir.join("missing.jpg")),
             ..options(&dir, true)
         };
-        let err = Job::new(Config::default(), opts).unwrap_err();
+        let err = Job::new(Paper::Postcard, postcard(), opts).unwrap_err();
         assert!(format!("{err:#}").contains("camera reference"), "{err:#}");
     }
 
@@ -313,7 +321,7 @@ mod tests {
             camera_ref: Some(camera),
             ..options(&dir, false)
         };
-        let job = Job::new(Config::default(), opts).unwrap();
+        let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
         let clone = job.clone();
 
         let from_job = job.run_one(&a).unwrap().prepared.output;
@@ -322,5 +330,18 @@ mod tests {
             .unwrap();
         assert_eq!(from_clone.parent(), from_job.parent());
         assert_eq!(fs::read(from_clone).unwrap(), fs::read(from_job).unwrap());
+    }
+
+    #[test]
+    fn the_record_names_the_jobs_paper_and_canvas() {
+        let dir = fresh_dir("batch-paper");
+        let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
+        let l = Paper::L.starting_profile();
+        let job = Job::new(Paper::L, l, options(&dir, false)).unwrap();
+        let output = job.run_one(&photo).unwrap().prepared.output;
+        let record = Record::read(&output).unwrap();
+        assert_eq!(record.paper, Paper::L);
+        // 119 x 89 mm at 300 ppi.
+        assert_eq!(record.canvas_px, (1406, 1051));
     }
 }

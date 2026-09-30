@@ -268,14 +268,19 @@ impl BatchView {
         cx.notify();
     }
 
-    /// The job for a run into the chosen folder, with the config file read
-    /// afresh and the env overrides applied, as `selphy prepare` does.
-    /// Sources stay in place and no camera reference is used, as the README
-    /// says. Shows why and returns `None` when it cannot be built.
+    /// The job for a run into the chosen folder, for the config's paper,
+    /// with the config file read afresh and the env overrides applied, as
+    /// `selphy prepare` does. Sources stay in place and no camera reference
+    /// is used, as the README says. Shows why and returns `None` when it
+    /// cannot be built.
     fn job(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Job> {
         let out_dir = self.out_dir.clone()?;
-        let cfg = match self.config.load() {
-            Ok(loaded) => loaded.effective,
+        let loaded = self
+            .config
+            .load(None)
+            .and_then(|loaded| Ok((loaded.paper, loaded.profile()?)));
+        let (paper, profile) = match loaded {
+            Ok(loaded) => loaded,
             Err(err) => {
                 let message = format!("{} Fix it in Config.", error_sentence(&err));
                 show_error(
@@ -292,7 +297,7 @@ impl BatchView {
             archive_dir: None,
             camera_ref: None,
         };
-        Job::new(cfg, opts)
+        Job::new(paper, profile, opts)
             .inspect_err(|err| {
                 show_error("Couldn't start preparing", error_sentence(err), window, cx)
             })

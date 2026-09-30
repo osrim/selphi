@@ -10,8 +10,9 @@ use anyhow::Result;
 use clap::{Args, ValueEnum};
 
 use selphy::calibrate::{self, CANDIDATES_MM};
-use selphy::config::{Config, ConfigFile};
+use selphy::config::{ConfigFile, Profile};
 use selphy::geometry::{Edge, Orientation, Trim};
+use selphy::paper::Paper;
 
 use crate::terminal::{Terminal, confirm_save, print_changes};
 
@@ -53,14 +54,28 @@ impl From<SheetOrientation> for Orientation {
     }
 }
 
-/// Writes the bracket sheet, then asks for the readings and offers to save
-/// the trims, as the flags select. The sheet uses the values this run uses;
-/// the readings are applied to the file's values.
-pub fn run(args: CalibrateArgs, term: &mut Terminal, file: &ConfigFile) -> Result<ExitCode> {
+/// Writes the paper's bracket sheet, then asks for the readings and offers
+/// to save the trims to the paper's table, as the flags select. The other
+/// papers' tables are kept.
+///
+/// The paper's profile is its table, else its starting profile. The sheet
+/// uses that profile with the overrides applied, as this run uses it; the
+/// readings are applied to it without them.
+pub fn run(
+    args: CalibrateArgs,
+    term: &mut Terminal,
+    file: &ConfigFile,
+    paper: Option<Paper>,
+) -> Result<ExitCode> {
     let orientation = Orientation::from(args.orientation);
-    let loaded = file.load()?;
+    let loaded = file.load(paper)?;
+    let paper = loaded.paper;
+    let before = loaded
+        .saved
+        .profile(paper)
+        .unwrap_or_else(|| paper.starting_profile());
     let later = format!(
-        "selphy calibrate --read --orientation {}",
+        "selphy calibrate --read --paper {paper} --orientation {}",
         orientation.name()
     );
 
@@ -69,8 +84,9 @@ pub fn run(args: CalibrateArgs, term: &mut Terminal, file: &ConfigFile) -> Resul
             .out
             .unwrap_or_else(|| PathBuf::from(format!("calibration-{}.jpg", orientation.name())));
         let font = calibrate::load_font(&args.font)?;
-        calibrate::write_sheet(&loaded.effective, orientation, &font, &out)?;
-        writeln!(term.out, "Wrote {}", out.display())?;
+        let sheet = loaded.apply_overrides(before.clone())?;
+        calibrate::write_sheet(paper, &sheet, orientation, &font, &out)?;
+        writeln!(term.out, "Wrote {} for {paper} paper", out.display())?;
         writeln!(
             term.out,
             "Print it Borderless and tear the tabs. On each edge, find the"
@@ -92,15 +108,15 @@ pub fn run(args: CalibrateArgs, term: &mut Terminal, file: &ConfigFile) -> Resul
         }
     }
 
-    let readings = ask_readings(term, &loaded.saved, orientation)?;
+    let readings = ask_readings(term, &before, orientation)?;
     if readings.is_empty() {
         writeln!(term.out, "No readings; nothing changed.")?;
         return Ok(ExitCode::SUCCESS);
     }
-    let updated = loaded.saved.with_trims(orientation, &readings)?;
-    print_changes(term, &loaded.saved, &updated, orientation)?;
+    let updated = before.with_trims(orientation, &readings)?;
+    print_changes(term, &before, &updated, orientation)?;
 
-    confirm_save(term, &loaded, &updated, file)?;
+    confirm_save(term, &loaded, &before, &updated, file)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -127,7 +143,7 @@ impl fmt::Display for Reading {
 /// orientation decides which trim each edge measures.
 fn ask_readings(
     term: &mut Terminal,
-    cfg: &Config,
+    profile: &Profile,
     orientation: Orientation,
 ) -> Result<Vec<(Edge, f64)>> {
     let help = format!(
@@ -142,7 +158,7 @@ fn ask_readings(
     let labels: Vec<String> = choices.iter().map(Reading::to_string).collect();
     let mut readings = Vec::new();
     for edge in Edge::ALL {
-        let current = Trim::at(orientation, edge).mm(cfg);
+        let current = Trim::at(orientation, edge).mm(profile);
         let message = format!(
             "{} edge: smallest number whose line still shows",
             edge.name()
@@ -217,7 +233,7 @@ mod tests {
             Answer::Confirm(true),
         ];
         let (mut term, written) = Terminal::scripted(answers);
-        let code = run(read_args(), &mut term, &file).unwrap();
+        let code = run(read_args(), &mut term, &file, None).unwrap();
         assert_eq!(code, ExitCode::SUCCESS);
         let out = written.out();
         assert!(
@@ -226,7 +242,14 @@ mod tests {
         );
         assert!(out.contains("  top                 2.10   2.10\n"), "{out}");
         assert!(out.ends_with("Saved.\n"), "{out}");
-        assert_eq!(file.load().unwrap().saved.trim_long_a_mm, 3.0);
+        assert_eq!(
+            file.load(None)
+                .unwrap()
+                .saved_profile()
+                .unwrap()
+                .trim_long_a_mm,
+            3.0
+        );
     }
 
     #[test]
@@ -241,7 +264,7 @@ mod tests {
         ];
         let (mut term, written) = Terminal::scripted(answers);
         assert_eq!(
-            run(read_args(), &mut term, &file).unwrap(),
+            run(read_args(), &mut term, &file, None).unwrap(),
             ExitCode::SUCCESS
         );
         assert!(written.out().ends_with("Not saved.\n"), "{}", written.out());
@@ -252,7 +275,7 @@ mod tests {
     fn a_cancel_is_a_cancelled_error_and_saves_nothing() {
         let file = ConfigFile::at(fresh_dir("cli-calibrate-cancel").join("printer.toml"));
         let (mut term, _) = Terminal::scripted([line(3.0), Answer::Cancel]);
-        let err = run(read_args(), &mut term, &file).unwrap_err();
+        let err = run(read_args(), &mut term, &file, None).unwrap_err();
         assert!(err.is::<Cancelled>(), "{err:#}");
         assert!(!file.exists().unwrap());
     }
@@ -262,7 +285,7 @@ mod tests {
         let file = ConfigFile::at(fresh_dir("cli-calibrate-skip").join("printer.toml"));
         let (mut term, written) = Terminal::scripted([Answer::Select(SKIP); 4]);
         assert_eq!(
-            run(read_args(), &mut term, &file).unwrap(),
+            run(read_args(), &mut term, &file, None).unwrap(),
             ExitCode::SUCCESS
         );
         assert_eq!(written.out(), "No readings; nothing changed.\n");
@@ -284,7 +307,7 @@ mod tests {
             Answer::Confirm(true),
         ];
         let (mut term, written) = Terminal::scripted(answers);
-        run(read_args(), &mut term, &file).unwrap();
+        run(read_args(), &mut term, &file, None).unwrap();
         // Only long A is saved; short A keeps its file value.
         assert_eq!(
             written.err(),
@@ -299,5 +322,74 @@ mod tests {
     fn readings_display_as_the_printed_labels() {
         assert_eq!(Reading::Line(2.0).to_string(), "2.0");
         assert_eq!(Reading::NoneVisible.to_string(), "no line visible");
+    }
+
+    #[test]
+    fn read_for_l_writes_the_l_table_and_keeps_postcard() {
+        let file = ConfigFile::at(fresh_dir("cli-calibrate-l").join("printer.toml"));
+        let postcard = Profile {
+            trim_long_a_mm: 4.0,
+            ..Paper::Postcard.starting_profile()
+        };
+        let before = selphy::config::Config::default().with_profile(Paper::Postcard, postcard);
+        file.save(&before).unwrap();
+        let answers = [
+            line(3.0),
+            line(2.0),
+            line(3.5),
+            line(1.5),
+            Answer::Confirm(true),
+        ];
+        let (mut term, written) = Terminal::scripted(answers);
+
+        run(read_args(), &mut term, &file, Some(Paper::L)).unwrap();
+
+        // The L profile starts with no trims.
+        assert!(
+            written
+                .out()
+                .contains("  left                0.00   3.00  *\n"),
+            "{}",
+            written.out()
+        );
+        let saved = file.load(None).unwrap().saved;
+        assert_eq!(saved.postcard, before.postcard);
+        assert_eq!(
+            saved.l,
+            Some(Profile {
+                trim_long_a_mm: 3.0,
+                trim_short_a_mm: 2.0,
+                trim_long_b_mm: 3.5,
+                trim_short_b_mm: 1.5,
+                ..Paper::L.starting_profile()
+            })
+        );
+        assert_eq!(saved.card, None);
+    }
+
+    #[test]
+    fn the_sheet_is_drawn_at_the_papers_canvas_and_names_it() {
+        let dir = fresh_dir("cli-calibrate-sheet");
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        let out = dir.join("sheet.jpg");
+        let args = CalibrateArgs {
+            sheet_only: true,
+            read: false,
+            out: Some(out.clone()),
+            ..read_args()
+        };
+        let (mut term, written) = Terminal::scripted([]);
+        run(args, &mut term, &file, Some(Paper::Card)).unwrap();
+        assert!(
+            written
+                .out()
+                .starts_with(&format!("Wrote {} for card paper\n", out.display())),
+            "{}",
+            written.out()
+        );
+        let sheet = selphy::imaging::load(&out).unwrap().image;
+        // 86 x 54 mm at 300 ppi.
+        assert_eq!((sheet.width(), sheet.height()), (1016, 638));
+        assert!(!file.exists().unwrap());
     }
 }

@@ -9,7 +9,8 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use selphy::config::ConfigFile;
+use selphy::config::{ConfigFile, PAPER_ENV};
+use selphy::paper::Paper;
 
 use terminal::{Cancelled, Terminal};
 
@@ -25,6 +26,10 @@ struct Cli {
     /// The printer config file [default: ~/.config/selphy/printer.toml]
     #[arg(long, global = true, env = "SELPHY_CONFIG", value_name = "FILE")]
     config: Option<PathBuf>,
+
+    /// The paper [default: the config's `paper`, else postcard]
+    #[arg(long, global = true, env = PAPER_ENV, value_enum)]
+    paper: Option<Paper>,
 
     #[command(subcommand)]
     command: Command,
@@ -47,10 +52,10 @@ fn main() -> ExitCode {
     let file = ConfigFile::locate(cli.config);
     let mut term = Terminal::real();
     let result = match cli.command {
-        Command::Prepare(args) => commands::prepare::run(args, &mut term, &file),
-        Command::Config(args) => commands::config::run(args, &mut term, &file),
-        Command::Calibrate(args) => commands::calibrate::run(args, &mut term, &file),
-        Command::Adjust(args) => commands::adjust::run(args, &mut term, &file),
+        Command::Prepare(args) => commands::prepare::run(args, &mut term, &file, cli.paper),
+        Command::Config(args) => commands::config::run(args, &mut term, &file, cli.paper),
+        Command::Calibrate(args) => commands::calibrate::run(args, &mut term, &file, cli.paper),
+        Command::Adjust(args) => commands::adjust::run(args, &mut term, &file, cli.paper),
     };
     finish(result, &mut term.err)
 }
@@ -116,5 +121,26 @@ mod tests {
         unsafe { std::env::remove_var("SELPHY_CONFIG") };
         assert_eq!(from_env, Some(PathBuf::from("env.toml")));
         assert_eq!(from_flag, Some(PathBuf::from("a.toml")));
+    }
+
+    #[test]
+    fn paper_works_before_and_after_the_command_and_wins_over_the_env() {
+        let parse = |args: &[&str]| Cli::try_parse_from(args).unwrap().paper;
+        assert_eq!(parse(&["selphy", "--paper", "l", "config"]), Some(Paper::L));
+        assert_eq!(
+            parse(&["selphy", "prepare", "--paper", "card"]),
+            Some(Paper::Card)
+        );
+        assert!(Cli::try_parse_from(["selphy", "--paper", "a4", "config"]).is_err());
+        // SAFETY: the only test in this process that reads or writes
+        // SELPHY_PAPER.
+        unsafe { std::env::set_var(PAPER_ENV, "card") };
+        let from_env = parse(&["selphy", "config"]);
+        let from_flag = parse(&["selphy", "config", "--paper", "l"]);
+        // SAFETY: as above.
+        unsafe { std::env::remove_var(PAPER_ENV) };
+        assert_eq!(from_env, Some(Paper::Card));
+        assert_eq!(from_flag, Some(Paper::L));
+        assert_eq!(parse(&["selphy", "config"]), None);
     }
 }

@@ -4,11 +4,11 @@
 
 use anyhow::{Result, bail};
 
-use crate::config::Config;
+use crate::config::Profile;
 use crate::geometry::{Canvas, Edge, px_to_mm};
 use crate::record::Record;
 
-/// The config after measuring a print of the file that `record` came from.
+/// The profile after measuring a print of the file that `record` came from.
 /// Each measurement is the white on that edge of the card in mm, or the
 /// picture lost there as a negative number. Edges not in `measured` keep
 /// their trim.
@@ -17,15 +17,18 @@ use crate::record::Record;
 /// The margin is canvas edge to picture edge, so this holds on edges with
 /// deliberate white too.
 ///
-/// A measurement that gives a negative trim, or a trim over half the
-/// canvas, is an error: it is a wrong reading. A result that leaves nothing
-/// to print is an error from [`Config::with_trims`].
+/// `profile` must be the profile of `record.paper`. A record that
+/// [`check_record`] refuses is an error. A measurement that gives a negative
+/// trim, or a trim over half the canvas, is an error: it is a wrong reading.
+/// A result that leaves nothing to print is an error from
+/// [`Profile::with_trims`].
 pub fn apply_measurements(
-    cfg: &Config,
+    profile: &Profile,
     record: &Record,
     measured: &[(Edge, f64)],
-) -> Result<Config> {
-    let canvas = Canvas::new(cfg, record.orientation);
+) -> Result<Profile> {
+    check_record(profile, record)?;
+    let canvas = Canvas::new(profile, record.orientation);
     let mut trims = Vec::with_capacity(measured.len());
     for &(edge, white_mm) in measured {
         let trim_mm = round_to_hundredths(record.trim_mm(edge, white_mm));
@@ -47,7 +50,22 @@ pub fn apply_measurements(
         }
         trims.push((edge, trim_mm));
     }
-    cfg.with_trims(record.orientation, &trims)
+    profile.with_trims(record.orientation, &trims)
+}
+
+/// Checks that a print of the file that `record` came from can correct
+/// `profile`: the profile's canvas must be the canvas the file was prepared
+/// on. Call it before asking for measurements, so that the user does not
+/// measure a print that cannot be used.
+pub fn check_record(profile: &Profile, record: &Record) -> Result<()> {
+    let canvas = Canvas::new(profile, record.orientation);
+    if (canvas.width, canvas.height) != record.canvas_px {
+        bail!(
+            "the {} canvas has changed since this file was prepared; prepare and print it again",
+            record.paper
+        );
+    }
+    Ok(())
 }
 
 /// Keeps the TOML tidy: 2.7253 is saved as 2.73.
@@ -58,21 +76,22 @@ fn round_to_hundredths(mm: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::postcard;
 
-    /// The config the user's portrait 3:2 print was made with.
-    fn old_config() -> Config {
-        Config {
+    /// The profile the user's portrait 3:2 print was made with.
+    fn old_profile() -> Profile {
+        Profile {
             trim_long_a_mm: 5.5,
             trim_long_b_mm: 5.5,
             trim_short_a_mm: 3.64,
             trim_short_b_mm: 3.73,
-            ..Config::default()
+            ..postcard()
         }
     }
 
-    /// Margins of 3.73, 5.50, 3.64 and 5.50 mm.
+    /// Margins of 3.73, 5.50, 3.64 and 5.50 mm, on the postcard canvas.
     fn portrait_record() -> Record {
-        "v1 portrait left=44 top=65 right=43 bottom=65"
+        "v2 postcard contain portrait canvas=1181x1772 left=44 top=65 right=43 bottom=65"
             .parse()
             .unwrap()
     }
@@ -85,22 +104,22 @@ mod tests {
             (Edge::Right, 1.5),
             (Edge::Bottom, 0.0),
         ];
-        let after = apply_measurements(&old_config(), &portrait_record(), &measured).unwrap();
+        let after = apply_measurements(&old_profile(), &portrait_record(), &measured).unwrap();
         // portrait top = long A, bottom = long B, left = short B, right = short A
         assert_eq!(after.trim_long_a_mm, 4.5);
         assert_eq!(after.trim_short_b_mm, 2.73);
         assert_eq!(after.trim_short_a_mm, 2.14);
         assert_eq!(after.trim_long_b_mm, 5.5);
-        assert_eq!(after.canvas_long_mm, old_config().canvas_long_mm);
+        assert_eq!(after.canvas_long_mm, old_profile().canvas_long_mm);
     }
 
     #[test]
     fn unmeasured_edges_keep_their_trim() {
-        let before = old_config();
+        let before = old_profile();
         let after = apply_measurements(&before, &portrait_record(), &[(Edge::Top, 1.0)]).unwrap();
         assert_eq!(after.trim_long_a_mm, 4.5);
         assert_eq!(
-            Config {
+            Profile {
                 trim_long_a_mm: before.trim_long_a_mm,
                 ..after
             },
@@ -110,14 +129,14 @@ mod tests {
 
     #[test]
     fn a_cut_picture_raises_the_trim() {
-        let after =
-            apply_measurements(&old_config(), &portrait_record(), &[(Edge::Bottom, -0.5)]).unwrap();
+        let after = apply_measurements(&old_profile(), &portrait_record(), &[(Edge::Bottom, -0.5)])
+            .unwrap();
         assert_eq!(after.trim_long_b_mm, 6.0);
     }
 
     #[test]
     fn more_white_than_margin_is_an_error_naming_the_edge() {
-        let err = apply_measurements(&old_config(), &portrait_record(), &[(Edge::Left, 4.0)])
+        let err = apply_measurements(&old_profile(), &portrait_record(), &[(Edge::Left, 4.0)])
             .unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("left edge"), "{message}");
@@ -127,7 +146,7 @@ mod tests {
     #[test]
     fn a_trim_over_half_the_canvas_is_an_error_naming_the_edge() {
         // Portrait canvas: 100mm wide, 150mm high.
-        let err = apply_measurements(&old_config(), &portrait_record(), &[(Edge::Right, -50.0)])
+        let err = apply_measurements(&old_profile(), &portrait_record(), &[(Edge::Right, -50.0)])
             .unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("right edge"), "{message}");
@@ -137,7 +156,7 @@ mod tests {
         );
         // The same cut fits on the taller side.
         assert!(
-            apply_measurements(&old_config(), &portrait_record(), &[(Edge::Top, -50.0)]).is_ok()
+            apply_measurements(&old_profile(), &portrait_record(), &[(Edge::Top, -50.0)]).is_ok()
         );
     }
 
@@ -146,11 +165,28 @@ mod tests {
         // Portrait canvas: 150mm high. 75mm trims are each within half of it,
         // but together they leave 0 px.
         let measured = [(Edge::Top, -69.5), (Edge::Bottom, -69.5)];
-        let err = apply_measurements(&old_config(), &portrait_record(), &measured).unwrap_err();
+        let err = apply_measurements(&old_profile(), &portrait_record(), &measured).unwrap_err();
         let message = format!("{err:#}");
         assert!(
             message.contains("the top and bottom trims (150 mm) leave nothing of the 150 mm side"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_changed_canvas_is_refused() {
+        let smaller = Profile {
+            canvas_long_mm: 148.0,
+            ..old_profile()
+        };
+        let err =
+            apply_measurements(&smaller, &portrait_record(), &[(Edge::Top, 1.0)]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "the postcard canvas has changed since this file was prepared; prepare and print it \
+             again"
+        );
+        assert!(check_record(&smaller, &portrait_record()).is_err());
+        assert!(check_record(&old_profile(), &portrait_record()).is_ok());
     }
 }

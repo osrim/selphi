@@ -90,9 +90,9 @@ pub fn sentence(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use crate::prepare::{Job, Options};
     use crate::test_util::fresh_dir;
+    use crate::test_util::postcard;
     use anyhow::{Context, anyhow};
     use std::fs;
 
@@ -107,10 +107,10 @@ mod tests {
 
     #[test]
     fn placement_summary_gives_the_stretch_and_the_white() {
-        let cfg = Config::default();
-        let fill = crate::geometry::place(&cfg, 3616, 5424).unwrap();
+        let profile = postcard();
+        let fill = crate::geometry::place(&profile, 3616, 5424).unwrap();
         assert_eq!(placement_summary(&fill), "stretched 1.9%, edge to edge");
-        let wide = crate::geometry::place(&cfg, 1920, 1080).unwrap();
+        let wide = crate::geometry::place(&profile, 1920, 1080).unwrap();
         assert_eq!(
             placement_summary(&wide),
             "stretched 2.5%, white top 7.2, bottom 7.2 mm"
@@ -123,7 +123,8 @@ mod tests {
         let bad = dir.join("broken.jpg");
         fs::write(&bad, b"not a jpeg").unwrap();
         let job = Job::new(
-            Config::default(),
+            crate::paper::Paper::Postcard,
+            postcard(),
             Options {
                 out_dir: dir.join("out"),
                 archive_dir: None,

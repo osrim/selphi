@@ -9,6 +9,7 @@ use anyhow::Result;
 use clap::Args;
 
 use selphy::config::ConfigFile;
+use selphy::paper::Paper;
 use selphy::prepare::{self, Done, Job, Options};
 use selphy::report::{photo_error, placement_summary};
 
@@ -37,9 +38,15 @@ pub struct PrepareArgs {
     camera_ref: Option<PathBuf>,
 }
 
-/// Prepares the photos, reporting each on stdout and each failure on stderr.
-/// Exits with failure when any photo failed.
-pub fn run(args: PrepareArgs, term: &mut Terminal, file: &ConfigFile) -> Result<ExitCode> {
+/// Prepares the photos for the paper, reporting each on stdout and each
+/// failure on stderr. Exits with failure when any photo failed. An
+/// uncalibrated paper is an error before any photo is read.
+pub fn run(
+    args: PrepareArgs,
+    term: &mut Terminal,
+    file: &ConfigFile,
+    paper: Option<Paper>,
+) -> Result<ExitCode> {
     // With no paths, work the default folders: src/ -> out/, archived to
     // originals/. Named paths are only archived when asked.
     let reading_src = args.paths.is_empty();
@@ -54,7 +61,8 @@ pub fn run(args: PrepareArgs, term: &mut Terminal, file: &ConfigFile) -> Result<
         (false, None) => reading_src.then(|| PathBuf::from("originals")),
     };
 
-    let cfg = file.load()?.effective;
+    let loaded = file.load(paper)?;
+    let profile = loaded.profile()?;
     let inputs = prepare::collect_inputs(&paths)?;
     if inputs.is_empty() {
         writeln!(term.err, "No images in {}", display_list(&paths))?;
@@ -62,7 +70,8 @@ pub fn run(args: PrepareArgs, term: &mut Terminal, file: &ConfigFile) -> Result<
     }
 
     let job = Job::new(
-        cfg,
+        loaded.paper,
+        profile,
         Options {
             out_dir: args.out,
             archive_dir,
@@ -154,7 +163,7 @@ mod tests {
         let (mut term, written) = Terminal::scripted([]);
         let file = ConfigFile::at(dir.join("printer.toml"));
 
-        let code = run(args(vec![src.clone()], &dir), &mut term, &file).unwrap();
+        let code = run(args(vec![src.clone()], &dir), &mut term, &file, None).unwrap();
 
         assert_eq!(code, ExitCode::FAILURE);
         let (out, err) = (written.out(), written.err());
@@ -179,7 +188,7 @@ mod tests {
         let (mut term, written) = Terminal::scripted([]);
         let file = ConfigFile::at(dir.join("printer.toml"));
 
-        let code = run(args(vec![dir.clone()], &dir), &mut term, &file).unwrap();
+        let code = run(args(vec![dir.clone()], &dir), &mut term, &file, None).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         assert_eq!(written.out(), "");
@@ -194,7 +203,7 @@ mod tests {
         let file = ConfigFile::at(dir.join("printer.toml"))
             .with_overrides([("SELPHY_MAX_STRETCH_PCT", "0")]);
 
-        let code = run(args(vec![photo], &dir), &mut term, &file).unwrap();
+        let code = run(args(vec![photo], &dir), &mut term, &file, None).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         assert!(
@@ -202,5 +211,29 @@ mod tests {
             "{}",
             written.out()
         );
+    }
+
+    #[test]
+    fn an_uncalibrated_paper_fails_with_the_calibrate_hint() {
+        let dir = fresh_dir("cli-prepare-uncalibrated");
+        let photo = write_jpeg(&dir.join("a.jpg"), 300, 200, &[]);
+        let (mut term, written) = Terminal::scripted([]);
+        let file = ConfigFile::at(dir.join("printer.toml"));
+
+        let err = run(
+            args(vec![photo.clone()], &dir),
+            &mut term,
+            &file,
+            Some(Paper::L),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "l paper is not calibrated. Run: selphy calibrate --paper l"
+        );
+        assert_eq!(written.out(), "");
+        assert!(photo.exists(), "the source is not archived");
+        assert!(!dir.join("out").exists());
     }
 }

@@ -54,9 +54,9 @@ mod tests {
 
     #[test]
     fn render_puts_the_photo_exactly_at_the_placement() {
-        let cfg = crate::config::Config::default();
+        let profile = crate::test_util::postcard();
         let photo = RgbImage::from_pixel(300, 200, Rgb([200, 0, 0]));
-        let p = crate::geometry::place(&cfg, 300, 200).unwrap();
+        let p = crate::geometry::place(&profile, 300, 200).unwrap();
         let sheet = render(&photo, &p);
 
         assert_eq!(i64::from(sheet.width()), p.canvas.width);

@@ -29,7 +29,7 @@ use inquire::validator::Validation;
 use inquire::{Confirm, CustomType, InquireError, Select};
 
 use selphy::config::fields::Field;
-use selphy::config::{Config, ConfigFile, Loaded};
+use selphy::config::{ConfigFile, Loaded, Profile};
 use selphy::geometry::{Edge, Orientation, Trim};
 
 /// The answer to a prompt was Esc or Ctrl-C.
@@ -124,8 +124,8 @@ impl Terminal {
 /// The trims on each edge before and after, with changed ones marked.
 pub fn print_changes(
     term: &mut Terminal,
-    before: &Config,
-    after: &Config,
+    before: &Profile,
+    after: &Profile,
     orientation: Orientation,
 ) -> Result<()> {
     writeln!(
@@ -142,18 +142,20 @@ pub fn print_changes(
     Ok(())
 }
 
-/// Warns on stderr for each trim that `updated` changes while an env var
-/// overrides it, then asks whether to save `updated` to the file, and saves
-/// it on yes.
+/// Warns on stderr for each trim that `updated` changes from `before` while
+/// an env var overrides it, then asks whether to save `updated` as the
+/// profile of `loaded.paper`, and saves it on yes. The other papers' tables
+/// are kept.
 pub fn confirm_save(
     term: &mut Terminal,
     loaded: &Loaded,
-    updated: &Config,
+    before: &Profile,
+    updated: &Profile,
     file: &ConfigFile,
 ) -> Result<()> {
     for trim in Trim::ALL {
         let field = Field::for_trim(trim);
-        if trim.mm(updated) != trim.mm(&loaded.saved) && loaded.override_of(field).is_some() {
+        if trim.mm(updated) != trim.mm(before) && loaded.override_of(field).is_some() {
             writeln!(
                 term.err,
                 "{} is set; the saved value is not used while it is",
@@ -162,7 +164,7 @@ pub fn confirm_save(
         }
     }
     if term.confirm(&format!("Save to {}?", file.path().display()), true)? {
-        file.save(updated)?;
+        file.save(&loaded.saved.with_profile(loaded.paper, updated.clone()))?;
         writeln!(term.out, "Saved.")?;
     } else {
         writeln!(term.out, "Not saved.")?;

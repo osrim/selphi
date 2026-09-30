@@ -9,6 +9,7 @@ pub mod calibrate;
 pub mod config;
 pub mod geometry;
 pub mod imaging;
+pub mod paper;
 pub mod prepare;
 pub mod record;
 pub mod report;

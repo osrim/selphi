@@ -9,7 +9,7 @@ name = "selphy"
 path = "src/main.rs"
 
 [dependencies]
-selphy.workspace = true
+selphy = { workspace = true, features = ["clap"] }
 anyhow.workspace = true
 clap.workspace = true
 indicatif.workspace = true
