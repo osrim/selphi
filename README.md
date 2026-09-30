@@ -15,11 +15,13 @@ Requires Rust. The version is pinned in `mise.toml`.
 ```sh
 cd ~/repositories/selphy
 mise install
-cargo install --path .
+cargo install --path crates/selphy-cli   # the `selphy` command line
+cargo install --path crates/selphy-gui   # the `selphy-gui` window
 ```
 
-This puts `selphy` and `selphy-gui` in `~/.cargo/bin`. The binaries have no
-other dependencies: ImageMagick and exiftool are not needed.
+Each command puts one binary in `~/.cargo/bin`. The command line builds
+without GPUI, so it installs fast. The binaries have no other dependencies:
+ImageMagick and exiftool are not needed.
 
 ## Commands
 
@@ -215,22 +217,19 @@ added by hand are not kept.
 
 ## Development
 
+The repo is a Cargo workspace with three crates:
+
+- `crates/selphy`: the library. It does all the work.
+- `crates/selphy-cli`: the `selphy` command line.
+- `crates/selphy-gui`: the `selphy-gui` window.
+
 ```sh
-cargo test                               # unit and binary tests
-cargo clippy --all-targets -- -D warnings
+cargo test                               # the library and the command line
+cargo test --workspace                   # also the window (builds GPUI)
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-| Module | Contents |
-|---|---|
-| `src/config.rs` | `Config`, loading and saving the TOML file |
-| `src/geometry/canvas.rs` | Units, orientation, edges, which trim lands on which edge |
-| `src/geometry/placement.rs` | `place()`: fit and capped stretch inside the safe box |
-| `src/imaging.rs` | Decoding, sRGB conversion, resize and sharpen, JPEG encoding |
-| `src/calibrate.rs` | The bracket sheet, and readings to trims |
-| `src/record.rs` | The placement record: writing, finding and parsing it |
-| `src/adjust.rs` | Measurements from a print to corrected trims |
-| `src/prepare.rs` | Collecting inputs, preparing one photo, archiving, the batch |
-| `src/report.rs` | Result text shared by the command line and the window |
-| `src/main.rs`, `src/cli/` | The command line: one module per command |
-| `src/bin/selphy-gui/` | The window: the batch, its view, the Config dialog, and `gui.toml` |
+The library has one module per concept in [`CONTEXT.md`](CONTEXT.md). The
+module layout is in
+[`docs/specs/05-workspace-and-module-layout.md`](docs/specs/05-workspace-and-module-layout.md).

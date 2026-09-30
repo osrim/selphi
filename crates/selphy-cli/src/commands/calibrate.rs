@@ -14,7 +14,7 @@ use selphy::calibrate::{self, CANDIDATES_MM};
 use selphy::config::{self, Config};
 use selphy::geometry::{Edge, Orientation, Trim};
 
-use super::report::{answer, confirm_save, print_changes};
+use crate::terminal::{answer, confirm_save, print_changes};
 
 #[derive(Args)]
 pub struct CalibrateArgs {

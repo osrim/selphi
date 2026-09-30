@@ -3,7 +3,6 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -13,51 +12,11 @@ use crate::config::Config;
 use crate::geometry::{self, Placement};
 use crate::imaging::{self, Source};
 
-/// The formats the decoder is built with (see the `image` features in
-/// Cargo.toml).
-const EXTENSIONS: [&str; 5] = ["jpg", "jpeg", "png", "tif", "tiff"];
+mod archive;
+mod inputs;
 
-/// The photos to prepare: every file named in `paths`, plus the supported
-/// images directly inside every directory named (not recursive). Sorted, and
-/// each file listed once.
-pub fn collect_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    for path in paths {
-        if !path.is_dir() {
-            files.push(path.clone());
-            continue;
-        }
-        let entries = fs::read_dir(path).with_context(|| format!("listing {}", path.display()))?;
-        for entry in entries {
-            let file = entry?.path();
-            if file.is_file() && is_supported(&file) {
-                files.push(file);
-            }
-        }
-    }
-    files.sort();
-    files.dedup();
-    Ok(files)
-}
-
-/// A supported extension, in any case, on a file that is not hidden. Hidden
-/// files include the `._name.jpg` metadata files macOS writes on external
-/// drives, which are not images.
-fn is_supported(path: &Path) -> bool {
-    let hidden = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with('.'));
-    let known = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            EXTENSIONS
-                .iter()
-                .any(|known| ext.eq_ignore_ascii_case(known))
-        });
-    known && !hidden
-}
+pub use archive::archive;
+pub use inputs::collect_inputs;
 
 /// What preparing one photo produced.
 #[derive(Debug)]
@@ -181,106 +140,14 @@ fn camera_exif(path: &Path) -> Result<Vec<u8>> {
         .with_context(|| format!("{}: no Exif block", context()))
 }
 
-/// Moves a finished source into `archive_dir` and returns where it went. An
-/// existing file there is never replaced: `photo.jpg` becomes `photo-2.jpg`,
-/// then `photo-3.jpg`, and so on.
-pub fn archive(source: &Path, archive_dir: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(archive_dir)
-        .with_context(|| format!("creating {}", archive_dir.display()))?;
-    let target = free_name(archive_dir, source)?;
-    match fs::rename(source, &target) {
-        Ok(()) => {}
-        // A rename cannot cross disks, e.g. src/ on an SD card.
-        Err(e) if e.kind() == ErrorKind::CrossesDevices => {
-            atomic::copy(source, &target)?;
-            fs::remove_file(source).with_context(|| format!("removing {}", source.display()))?;
-        }
-        Err(e) => {
-            return Err(e).with_context(|| format!("moving to {}", target.display()));
-        }
-    }
-    Ok(target)
-}
-
-/// The first of `name.ext`, `name-2.ext`, `name-3.ext`, ... that does not
-/// exist in `dir`.
-fn free_name(dir: &Path, source: &Path) -> Result<PathBuf> {
-    let stem = source
-        .file_stem()
-        .with_context(|| format!("{} has no file name", source.display()))?;
-    let mut n = 1;
-    let target = loop {
-        let mut name = stem.to_os_string();
-        if n > 1 {
-            name.push(format!("-{n}"));
-        }
-        if let Some(ext) = source.extension() {
-            name.push(".");
-            name.push(ext);
-        }
-        let candidate = dir.join(name);
-        if !candidate.try_exists()? {
-            break candidate;
-        }
-        n += 1;
-    };
-    Ok(target)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{exif_with_orientation, fresh_dir};
+    use crate::test_util::{exif_with_orientation, fresh_dir, write_jpeg};
 
-    #[test]
-    fn collects_supported_images_from_a_directory() {
-        let dir = fresh_dir("collect");
-        for name in [
-            "b.jpg",
-            "A.JPEG",
-            "c.tif",
-            "notes.txt",
-            ".hidden.jpg",
-            "._b.jpg",
-        ] {
-            fs::write(dir.join(name), b"").unwrap();
-        }
-        fs::create_dir(dir.join("nested.jpg")).unwrap(); // a directory, not a file
-
-        let names: Vec<String> = collect_inputs(&[dir])
-            .unwrap()
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, ["A.JPEG", "b.jpg", "c.tif"]);
-    }
-
-    #[test]
-    fn named_files_are_kept_as_given_and_listed_once() {
-        let dir = fresh_dir("collect-named");
-        let photo = dir.join("photo.jpg");
-        fs::write(&photo, b"").unwrap();
-        let odd = dir.join("scan.bmp"); // unsupported extension, but asked for
-        let files = collect_inputs(&[photo.clone(), dir.clone(), odd.clone()]).unwrap();
-        assert_eq!(files, [photo, odd]);
-    }
-
-    #[test]
-    fn a_missing_directory_is_just_a_missing_file() {
-        let paths = [PathBuf::from("/nonexistent/src")];
-        assert_eq!(collect_inputs(&paths).unwrap(), paths);
-    }
-
-    /// Writes a small grey JPEG with the given Exif block, returns its path.
+    /// Writes a 300x200 grey JPEG with the given Exif block, returns its path.
     fn source_jpeg(dir: &Path, name: &str, exif: &[u8]) -> PathBuf {
-        let path = dir.join(name);
-        let mut encoder = jpeg_encoder::Encoder::new_file(&path, 90).unwrap();
-        encoder.add_exif_metadata(exif).unwrap();
-        let pixels = vec![128u8; 300 * 200 * 3];
-        encoder
-            .encode(&pixels, 300, 200, jpeg_encoder::ColorType::Rgb)
-            .unwrap();
-        path
+        write_jpeg(&dir.join(name), 300, 200, exif)
     }
 
     fn exif_of(path: &Path) -> Option<Vec<u8>> {
@@ -331,40 +198,6 @@ mod tests {
         let err = prepare_one(&bad, &out, &Config::default(), None).unwrap_err();
         assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
         assert!(!out.exists(), "nothing is written for a failed photo");
-    }
-
-    #[test]
-    fn archive_never_replaces_an_existing_file() {
-        let dir = fresh_dir("archive");
-        let (src, originals) = (dir.join("src"), dir.join("originals"));
-        fs::create_dir(&src).unwrap();
-
-        let mut archived = Vec::new();
-        for round in 1..=3 {
-            let photo = src.join("photo.v2.jpg");
-            fs::write(&photo, format!("round {round}")).unwrap();
-            archived.push(archive(&photo, &originals).unwrap());
-            assert!(!photo.exists(), "the source is moved, not copied");
-        }
-
-        let names: Vec<_> = archived.iter().map(|p| p.file_name().unwrap()).collect();
-        assert_eq!(names, ["photo.v2.jpg", "photo.v2-2.jpg", "photo.v2-3.jpg"]);
-        let first = fs::read_to_string(&archived[0]).unwrap();
-        assert_eq!(first, "round 1", "the first archived file is untouched");
-    }
-
-    #[test]
-    fn archive_numbers_files_without_an_extension() {
-        let dir = fresh_dir("archive-no-ext");
-        let originals = dir.join("originals");
-        fs::create_dir(&originals).unwrap();
-        fs::write(originals.join("scan"), b"old").unwrap();
-        let scan = dir.join("scan");
-        fs::write(&scan, b"new").unwrap();
-        assert_eq!(
-            archive(&scan, &originals).unwrap(),
-            originals.join("scan-2")
-        );
     }
 
     fn options(dir: &Path, archive: bool) -> Options {

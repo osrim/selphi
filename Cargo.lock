@@ -6288,14 +6288,32 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
- "clap",
- "gpui-kit",
  "image",
  "imageproc",
- "indicatif",
- "inquire",
  "jpeg-encoder",
  "moxcms 0.9.1",
+ "serde",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
+name = "selphy-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "indicatif",
+ "inquire",
+ "selphy",
+]
+
+[[package]]
+name = "selphy-gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "selphy",
  "serde",
  "toml 1.1.6+spec-1.1.0",
 ]

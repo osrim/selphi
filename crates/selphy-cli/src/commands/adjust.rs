@@ -14,7 +14,7 @@ use selphy::config::{self, Config};
 use selphy::geometry::{Edge, px_to_mm};
 use selphy::record::Record;
 
-use super::report::{answer, confirm_save, print_changes};
+use crate::terminal::{answer, confirm_save, print_changes};
 
 #[derive(Args)]
 pub struct AdjustArgs {

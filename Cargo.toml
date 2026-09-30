@@ -1,9 +1,15 @@
-[package]
-name = "selphy"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/selphy", "crates/selphy-cli"]
 
-[dependencies]
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+rust-version = "1.98.1"
+
+[workspace.dependencies]
+selphy = { path = "crates/selphy" }
 ab_glyph = "0.2.32"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env"] }
@@ -17,7 +23,10 @@ moxcms = "0.9.1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.6"
 
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
 # Image code is 10-50x slower unoptimised. Optimise dependencies even in dev
-# builds; our own crate stays fast to compile.
+# builds; our own crates stay fast to compile.
 [profile.dev.package."*"]
 opt-level = 3

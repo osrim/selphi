@@ -1,7 +1,7 @@
 //! Helpers shared by the unit tests.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// An empty directory under the system temp dir, unique to this test run and
 /// `name`. Anything left there by an earlier run is removed first.
@@ -24,4 +24,16 @@ pub fn exif_with_orientation(value: u16) -> Vec<u8> {
     exif.extend([0, 0]); // value field padding
     exif.extend(0u32.to_le_bytes()); // no next IFD
     exif
+}
+
+/// Writes a mid-grey JPEG of `width` x `height` with the given Exif block to
+/// `path`, and returns the path.
+pub fn write_jpeg(path: &Path, width: u16, height: u16, exif: &[u8]) -> PathBuf {
+    let mut encoder = jpeg_encoder::Encoder::new_file(path, 90).unwrap();
+    encoder.add_exif_metadata(exif).unwrap();
+    let pixels = vec![128u8; usize::from(width) * usize::from(height) * 3];
+    encoder
+        .encode(&pixels, width, height, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    path.to_path_buf()
 }
