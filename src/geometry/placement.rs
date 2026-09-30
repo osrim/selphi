@@ -7,10 +7,15 @@ use crate::config::Config;
 /// Where a picture goes on its canvas: its size and top-left corner, in pixels.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placement {
+    /// The canvas the picture is placed on.
     pub canvas: Canvas,
+    /// The picture's left edge, from the canvas's left edge.
     pub x: i64,
+    /// The picture's top edge, from the canvas's top edge.
     pub y: i64,
+    /// The picture's width after scaling and stretching.
     pub width: i64,
+    /// The picture's height after scaling and stretching.
     pub height: i64,
     /// How far the picture's aspect was changed, in percent.
     pub stretch_pct: f64,
@@ -129,8 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn sizes_match_the_bash_version() {
-        // Picture sizes process.sh printed for the same inputs and config.
+    fn common_shapes_get_the_expected_sizes() {
         let cfg = Config::default();
         let cases = [
             ((1920, 1080), (1654, 954)),

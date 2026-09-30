@@ -30,6 +30,8 @@ const SAMPLE_SHAPES: [(&str, u32, u32); 4] = [
     ("1:1", 2000, 2000),
 ];
 
+/// Prints the config file's path, writes the file, or shows the geometry, as
+/// the flags select.
 pub fn run(args: ConfigArgs) -> Result<ExitCode> {
     let path = config::default_path();
     if args.path {

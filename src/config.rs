@@ -22,10 +22,15 @@ pub struct Config {
     /// The canvas handed to the printer. 150x100mm maps cleanly onto postcard
     /// stock (100x148mm after the tabs are torn off). NOT 4x6 inch.
     pub canvas_long_mm: f64,
+    /// The canvas's short side.
     pub canvas_short_mm: f64,
+    /// Trim on the landscape canvas's left end.
     pub trim_long_a_mm: f64,
+    /// Trim on the landscape canvas's right end.
     pub trim_long_b_mm: f64,
+    /// Trim on the landscape canvas's top edge.
     pub trim_short_a_mm: f64,
+    /// Trim on the landscape canvas's bottom edge.
     pub trim_short_b_mm: f64,
     /// Largest one-axis stretch, in percent, used to close the gap between
     /// the picture's aspect and the card's. 2:3 needs 1.9%.

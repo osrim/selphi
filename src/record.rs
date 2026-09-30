@@ -20,14 +20,18 @@ pub const SEGMENT: u8 = 15;
 const MARKER: u8 = 0xE0 + SEGMENT;
 const SIGNATURE: &[u8] = b"selphy\0";
 
+/// Where `prepare` put the picture: enough to turn the white measured on a
+/// print back into trims.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
+    /// The canvas's orientation.
     pub orientation: Orientation,
     /// Canvas edge to picture edge in pixels, in `Edge::ALL` order.
     margins: [i64; 4],
 }
 
 impl Record {
+    /// The record of `placement`.
     pub fn of(placement: &Placement) -> Self {
         Self {
             orientation: placement.canvas.orientation,
@@ -35,6 +39,7 @@ impl Record {
         }
     }
 
+    /// Canvas edge to picture edge on `edge`, in pixels.
     pub fn margin_px(&self, edge: Edge) -> i64 {
         self.margins[edge as usize]
     }

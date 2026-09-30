@@ -54,6 +54,8 @@ impl From<SheetOrientation> for Orientation {
     }
 }
 
+/// Writes the bracket sheet, then asks for the readings and offers to save
+/// the trims, as the flags select.
 pub fn run(args: CalibrateArgs) -> Result<ExitCode> {
     let orientation = Orientation::from(args.orientation);
     let path = config::default_path();

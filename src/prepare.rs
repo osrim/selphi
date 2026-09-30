@@ -62,7 +62,9 @@ fn is_supported(path: &Path) -> bool {
 /// What preparing one photo produced.
 #[derive(Debug)]
 pub struct Prepared {
+    /// The print-ready JPEG.
     pub output: PathBuf,
+    /// Where the picture went on the canvas.
     pub placement: Placement,
 }
 
@@ -105,6 +107,7 @@ fn output_name(source: &Path) -> Result<OsString> {
 /// Where a batch reads and writes.
 #[derive(Debug, Clone)]
 pub struct Options {
+    /// Where the print-ready JPEGs go.
     pub out_dir: PathBuf,
     /// Where finished sources are moved. `None` leaves them in place.
     pub archive_dir: Option<PathBuf>,
@@ -115,12 +118,16 @@ pub struct Options {
 /// What happened to one input.
 #[derive(Debug)]
 pub struct Outcome {
+    /// The input as given.
     pub source: PathBuf,
+    /// What was done, or why it failed.
     pub result: Result<Done>,
 }
 
+/// A photo that was prepared, and archived when asked.
 #[derive(Debug)]
 pub struct Done {
+    /// The output and its placement.
     pub prepared: Prepared,
     /// Where the source went, when archiving.
     pub archived: Option<PathBuf>,

@@ -158,8 +158,8 @@ correct results too. `adjust` then shows the trims before and after, and saves
 them to the config file when you confirm. It stops with an error when a trim
 would be below 0 or more than half the canvas side.
 
-The file must hold a placement record. JPEGs from the old bash scripts do not;
-prepare the photo again. The prompts need a terminal.
+The file must hold a placement record, which only `selphy prepare` writes.
+The prompts need a terminal.
 
 ## Configuration
 

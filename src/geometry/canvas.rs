@@ -7,21 +7,27 @@ use crate::config::Config;
 pub const PPI: f64 = 300.0;
 const MM_PER_INCH: f64 = 25.4;
 
+/// Millimetres as whole pixels at [`PPI`], rounded to the nearest.
 pub fn mm_to_px(mm: f64) -> i64 {
     (mm * PPI / MM_PER_INCH).round() as i64
 }
 
+/// Pixels at [`PPI`] as millimetres.
 pub fn px_to_mm(px: i64) -> f64 {
     px as f64 * MM_PER_INCH / PPI
 }
 
+/// Which way up a picture, and so its canvas, is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
+    /// Wider than tall, or square.
     Landscape,
+    /// Taller than wide.
     Portrait,
 }
 
 impl Orientation {
+    /// Both orientations.
     pub const ALL: [Orientation; 2] = [Orientation::Landscape, Orientation::Portrait];
 
     /// Square pictures count as landscape.
@@ -33,6 +39,8 @@ impl Orientation {
         }
     }
 
+    /// The lowercase name, as the command line and the placement record
+    /// spell it.
     pub fn name(self) -> &'static str {
         match self {
             Self::Landscape => "landscape",
@@ -44,15 +52,21 @@ impl Orientation {
 /// An edge of the canvas, as the picture is seen the right way up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
+    /// The left edge.
     Left,
+    /// The top edge.
     Top,
+    /// The right edge.
     Right,
+    /// The bottom edge.
     Bottom,
 }
 
 impl Edge {
+    /// All four edges, clockwise from the left.
     pub const ALL: [Edge; 4] = [Edge::Left, Edge::Top, Edge::Right, Edge::Bottom];
 
+    /// The lowercase name, as prompts and the placement record spell it.
     pub fn name(self) -> &'static str {
         match self {
             Self::Left => "left",
@@ -66,9 +80,13 @@ impl Edge {
 /// One of the four trims in `Config`, named for the landscape canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trim {
+    /// `trim_long_a_mm`: the landscape left end.
     LongA,
+    /// `trim_long_b_mm`: the landscape right end.
     LongB,
+    /// `trim_short_a_mm`: the landscape top edge.
     ShortA,
+    /// `trim_short_b_mm`: the landscape bottom edge.
     ShortB,
 }
 
@@ -91,6 +109,7 @@ impl Trim {
         }
     }
 
+    /// This trim's value in `cfg`.
     pub fn mm(self, cfg: &Config) -> f64 {
         match self {
             Self::LongA => cfg.trim_long_a_mm,
@@ -115,8 +134,11 @@ impl Trim {
 /// box is what is left after the trims: the part that reaches the card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Canvas {
+    /// Which way up the canvas is.
     pub orientation: Orientation,
+    /// The whole canvas, trims included.
     pub width: i64,
+    /// The whole canvas, trims included.
     pub height: i64,
     trim_left: i64,
     trim_top: i64,
@@ -125,6 +147,8 @@ pub struct Canvas {
 }
 
 impl Canvas {
+    /// The configured canvas in `orientation`, with each trim on the edge it
+    /// lands on.
     pub fn new(cfg: &Config, orientation: Orientation) -> Self {
         let long = mm_to_px(cfg.canvas_long_mm);
         let short = mm_to_px(cfg.canvas_short_mm);
@@ -144,6 +168,7 @@ impl Canvas {
         }
     }
 
+    /// The trim on `edge`.
     pub fn trim(&self, edge: Edge) -> i64 {
         match edge {
             Edge::Left => self.trim_left,
@@ -162,10 +187,12 @@ impl Canvas {
         }
     }
 
+    /// The width that reaches the card.
     pub fn safe_width(&self) -> i64 {
         self.width - self.trim_left - self.trim_right
     }
 
+    /// The height that reaches the card.
     pub fn safe_height(&self) -> i64 {
         self.height - self.trim_top - self.trim_bottom
     }
@@ -176,8 +203,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mm_to_px_matches_the_bash_version() {
-        // The pixel values geometry.sh produced for the same millimetres.
+    fn mm_to_px_rounds_to_the_nearest_pixel() {
         assert_eq!(mm_to_px(150.0), 1772);
         assert_eq!(mm_to_px(100.0), 1181);
         assert_eq!(mm_to_px(4.5), 53);

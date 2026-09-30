@@ -22,7 +22,7 @@ use crate::{atomic, imaging};
 /// The candidate trims, one keyline per edge each.
 pub const CANDIDATES_MM: [f64; 9] = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5];
 
-/// The font `calibrate.sh` used. Any TrueType font works.
+/// Arial, which macOS ships. Any TrueType font works.
 pub const DEFAULT_FONT: &str = "/System/Library/Fonts/Supplemental/Arial.ttf";
 
 const LINE_PX: i64 = 4;
@@ -50,6 +50,7 @@ pub fn write_sheet(
     atomic::write(path, jpeg)
 }
 
+/// Reads the TrueType font at `path`.
 pub fn load_font(path: &Path) -> Result<FontVec> {
     let bytes = fs::read(path).with_context(|| format!("reading the font {}", path.display()))?;
     FontVec::try_from_vec(bytes).with_context(|| format!("{} is not a font", path.display()))

@@ -12,12 +12,10 @@ use moxcms::{ColorProfile, DataColorSpace, Layout, TransformOptions};
 use crate::geometry::{PPI, Placement};
 use crate::record::{self, Record};
 
-/// JPEG quality for prints, the same number the bash version gave
-/// ImageMagick. The two encoders' scales are similar but not identical.
+/// JPEG quality for prints.
 const QUALITY: u8 = 88;
 
-/// Unsharp mask after resizing, matching the bash version's ImageMagick
-/// `-unsharp 0x0.75+0.75+0.008`: blur sigma, strength, and the smallest
+/// Unsharp mask after resizing: blur sigma, strength, and the smallest
 /// difference (as a fraction of full scale) that gets sharpened.
 const SHARPEN_SIGMA: f32 = 0.75;
 const SHARPEN_AMOUNT: f32 = 0.75;
@@ -25,6 +23,7 @@ const SHARPEN_THRESHOLD: f32 = 0.008 * 255.0;
 
 /// A decoded photo, turned the right way up, with the metadata we carry over.
 pub struct Source {
+    /// The pixels, the right way up.
     pub image: DynamicImage,
     /// The embedded colour profile, if any. `None` means sRGB.
     pub icc_profile: Option<Vec<u8>>,
@@ -33,6 +32,7 @@ pub struct Source {
     pub exif: Option<Vec<u8>>,
 }
 
+/// Decodes the photo at `path` and applies its Exif rotation.
 pub fn load(path: &Path) -> Result<Source> {
     let mut decoder = ImageReader::open(path)
         .with_context(|| format!("opening {}", path.display()))?

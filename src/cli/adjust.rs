@@ -22,6 +22,8 @@ pub struct AdjustArgs {
     file: PathBuf,
 }
 
+/// Asks for the white on each edge of the printed file, then offers to save
+/// the corrected trims.
 pub fn run(args: AdjustArgs) -> Result<ExitCode> {
     let record = Record::read(&args.file)?;
     let path = config::default_path();
