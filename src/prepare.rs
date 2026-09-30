@@ -68,7 +68,7 @@ pub struct Prepared {
     pub placement: Placement,
 }
 
-/// Prepares one photo and writes it to `out_dir/<name>.jpg`. The photo's own
+/// Prepares one photo and writes it to `out_dir/<name>-selphy.jpg`. The photo's own
 /// Exif is not carried over: it names the editing software, which some
 /// printers reject, and its resolution tags contradict the 300 dpi header.
 /// `camera_exif`, when given, is written instead.
@@ -93,14 +93,14 @@ pub fn prepare_one(
     Ok(Prepared { output, placement })
 }
 
-/// `photo.v2.png` becomes `photo.v2.jpg`: only the last extension is
+/// `photo.v2.png` becomes `photo.v2-selphy.jpg`: only the last extension is
 /// replaced.
 fn output_name(source: &Path) -> Result<OsString> {
     let mut name = source
         .file_stem()
         .with_context(|| format!("{} has no file name", source.display()))?
         .to_os_string();
-    name.push(".jpg");
+    name.push("-selphy.jpg");
     Ok(name)
 }
 
@@ -299,7 +299,7 @@ mod tests {
         let out = dir.join("out");
 
         let done = prepare_one(&source, &out, &Config::default(), None).unwrap();
-        assert_eq!(done.output, out.join("photo.v2.jpg"));
+        assert_eq!(done.output, out.join("photo.v2-selphy.jpg"));
         let written = image::open(&done.output).unwrap();
         assert_eq!((written.width(), written.height()), (1772, 1181));
         assert_eq!(

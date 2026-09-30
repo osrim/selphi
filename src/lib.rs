@@ -11,6 +11,7 @@ pub mod geometry;
 pub mod imaging;
 pub mod prepare;
 pub mod record;
+pub mod report;
 
 #[cfg(test)]
 mod test_util;

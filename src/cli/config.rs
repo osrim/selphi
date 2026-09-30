@@ -9,7 +9,7 @@ use clap::Args;
 use selphy::config::{self, Config};
 use selphy::geometry::{self, Edge, Orientation, Trim};
 
-use super::report::white_summary;
+use selphy::report::white_summary;
 
 #[derive(Args)]
 pub struct ConfigArgs {

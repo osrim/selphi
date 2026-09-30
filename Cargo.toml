@@ -7,6 +7,7 @@ edition = "2024"
 ab_glyph = "0.2.32"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env"] }
+gpui-kit = "0.7.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff"] }
 imageproc = { version = "0.27.0", default-features = false, features = ["text"] }
 indicatif = "0.18.6"

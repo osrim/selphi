@@ -11,7 +11,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use selphy::config::{self, Config};
 use selphy::prepare::{self, Done, Options};
 
-use super::report::{error_chain, white_summary};
+use selphy::report::{error_chain, white_summary};
 
 #[derive(Args)]
 pub struct PrepareArgs {

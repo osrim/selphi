@@ -18,8 +18,8 @@ mise install
 cargo install --path .
 ```
 
-This puts `selphy` in `~/.cargo/bin`. The binary has no other dependencies:
-ImageMagick and exiftool are not needed.
+This puts `selphy` and `selphy-gui` in `~/.cargo/bin`. The binaries have no
+other dependencies: ImageMagick and exiftool are not needed.
 
 ## Commands
 
@@ -52,8 +52,8 @@ For each photo, `prepare`:
    The side that falls short is stretched by up to 2.5%, because the card is
    not 2:3. A 2:3 photo needs 1.9% and fills the card edge to edge.
 4. Sharpens, and writes a 150x100 mm, 300 dpi, baseline JPEG with 4:2:0
-   chroma to `out/<name>.jpg`. Only the last extension is replaced:
-   `photo.v2.png` becomes `photo.v2.jpg`.
+   chroma to `out/<name>-selphy.jpg`. Only the last extension is replaced:
+   `photo.v2.png` becomes `photo.v2-selphy.jpg`.
 5. Moves the source to the archive folder. An existing file is never
    replaced: `photo.jpg` becomes `photo-2.jpg`, then `photo-3.jpg`.
 
@@ -77,6 +77,31 @@ photos are still prepared. The output reports each photo:
 ```
 
 The exit code is 1 when any photo failed.
+
+### `selphy-gui`
+
+A window for `prepare`. Drop photos or folders on it, or use Add…. Choose the
+folder the prints go to (on macOS it starts at `~/Pictures`), then Prepare.
+Each photo shows its result or its error. Cancel stops the run after the
+photo in progress. Sources are not moved, and no camera reference is used.
+
+The gear button (Cmd-,) opens the Config dialog. It has two sections:
+
+- Appearance: the theme, System, Light or Dark. It is saved to `gui.toml`
+  next to the printer config. The command line does not read this file.
+- Printer: the four trims, the canvas and the largest stretch. They are saved
+  to the config file that the command line reads.
+
+Restore defaults puts the default values in every field. Nothing is written
+until Save.
+
+| Key | Command |
+|---|---|
+| Cmd-O | Add photos |
+| Cmd-Shift-O | Choose the output folder |
+| Enter | Prepare |
+| Escape | Cancel the run |
+| Cmd-, | Config |
 
 ### `selphy config`
 
@@ -142,7 +167,7 @@ Corrects the trims from measurements of a printed photo. This is finer than
 `calibrate`, which measures in 0.5 mm steps.
 
 ```sh
-selphy adjust out/photo.jpg
+selphy adjust out/photo-selphy.jpg
 ```
 
 Print a JPEG from `selphy prepare` Borderless, and hold the card in the
@@ -206,4 +231,6 @@ cargo fmt --check
 | `src/record.rs` | The placement record: writing, finding and parsing it |
 | `src/adjust.rs` | Measurements from a print to corrected trims |
 | `src/prepare.rs` | Collecting inputs, preparing one photo, archiving, the batch |
+| `src/report.rs` | Result text shared by the command line and the window |
 | `src/main.rs`, `src/cli/` | The command line: one module per command |
+| `src/bin/selphy-gui/` | The window: the batch, its view, the Config dialog, and `gui.toml` |
