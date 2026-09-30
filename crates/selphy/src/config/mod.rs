@@ -13,13 +13,13 @@ mod file;
 
 use fields::Field;
 
-pub use file::{ConfigFile, Loaded, Override, PAPER_ENV};
+pub use file::{ConfigFile, FIT_ENV, Loaded, Override, PAPER_ENV};
 
-use crate::geometry::{Edge, Orientation, Trim, mm_to_px};
+use crate::geometry::{Edge, Fit, Orientation, Trim, mm_to_px};
 use crate::paper::Paper;
 
-/// The config file: the default paper, and a table for each calibrated
-/// paper. A paper without a table uses [`Paper::default_profile`].
+/// The config file: the default paper, the default fit, and a table for
+/// each calibrated paper. A paper without a table uses [`Paper::default_profile`].
 ///
 /// Keys missing from a table take their value from the paper's
 /// [`Paper::starting_profile`], except that a paper with no built-in
@@ -31,6 +31,10 @@ pub struct Config {
     /// `SELPHY_PAPER`. `None` means postcard.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paper: Option<Paper>,
+    /// The fit to use when none is named on the command line or in
+    /// `SELPHY_FIT`. `None` means contain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit: Option<Fit>,
     /// The `[postcard]` table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub postcard: Option<Profile>,
@@ -95,6 +99,7 @@ impl Config {
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     paper: Option<Paper>,
+    fit: Option<Fit>,
     postcard: Option<toml::Table>,
     l: Option<toml::Table>,
     card: Option<toml::Table>,
@@ -106,6 +111,7 @@ impl TryFrom<RawConfig> for Config {
     fn try_from(raw: RawConfig) -> Result<Self, String> {
         let mut config = Config {
             paper: raw.paper,
+            fit: raw.fit,
             ..Config::default()
         };
         let tables = [

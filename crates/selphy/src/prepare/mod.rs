@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 
 use crate::atomic;
 use crate::config::Profile;
-use crate::geometry::{self, Placement};
+use crate::geometry::{self, Fit, Placement};
 use crate::imaging::{self, Source};
 use crate::paper::Paper;
 use crate::record::Record;
@@ -28,33 +28,6 @@ pub struct Prepared {
     pub output: PathBuf,
     /// Where the picture went on the canvas.
     pub placement: Placement,
-}
-
-/// Prepares one photo for `paper` and writes it to `out_dir/<name>-selphy.jpg`. The photo's own
-/// Exif is not carried over: it names the editing software, which some
-/// printers reject, and its resolution tags contradict the 300 dpi header.
-/// `camera_exif`, when given, is written instead.
-fn prepare_one(
-    source: &Path,
-    out_dir: &Path,
-    paper: Paper,
-    profile: &Profile,
-    camera_exif: Option<&[u8]>,
-) -> Result<Prepared> {
-    let Source {
-        image, icc_profile, ..
-    } = imaging::load(source)?;
-    let placement =
-        geometry::place(profile, image.width(), image.height()).context("the image is empty")?;
-    let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
-    let sheet = imaging::render(&photo, &placement);
-    let record = Record::of(paper, &placement);
-    let jpeg = imaging::encode_jpeg(&sheet, camera_exif, &[record.segment()])?;
-
-    let output = out_dir.join(output_name(source)?);
-    fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
-    atomic::write(&output, jpeg)?;
-    Ok(Prepared { output, placement })
 }
 
 /// `photo.v2.png` becomes `photo.v2-selphy.jpg`: only the last extension is
@@ -77,6 +50,8 @@ pub struct Options {
     pub archive_dir: Option<PathBuf>,
     /// An unedited camera JPEG whose Exif is written into every output.
     pub camera_ref: Option<PathBuf>,
+    /// How each photo fills the safe box. The placement record says which.
+    pub fit: Fit,
 }
 
 /// A photo that was prepared, and archived when asked.
@@ -132,13 +107,7 @@ impl Job {
     /// job has an archive folder. A failed photo is not archived, so it stays
     /// where it was for inspection.
     pub fn run_one(&self, source: &Path) -> Result<Done> {
-        let prepared = prepare_one(
-            source,
-            &self.opts.out_dir,
-            self.paper,
-            &self.profile,
-            self.camera_exif.as_deref(),
-        )?;
+        let prepared = self.prepare(source)?;
         let archived = match &self.opts.archive_dir {
             // Named, so that an archive failure does not read like a failed
             // prepare once the source path is left out.
@@ -148,6 +117,30 @@ impl Job {
             None => None,
         };
         Ok(Done { prepared, archived })
+    }
+
+    /// Prepares `source` and writes it to `<out_dir>/<name>-selphy.jpg`. The
+    /// photo's own Exif is not carried over: it names the editing software,
+    /// which some printers reject, and its resolution tags contradict the
+    /// 300 dpi header. The camera reference's Exif, when given, is written
+    /// instead.
+    fn prepare(&self, source: &Path) -> Result<Prepared> {
+        let Source {
+            image, icc_profile, ..
+        } = imaging::load(source)?;
+        let placement =
+            geometry::place(&self.profile, image.width(), image.height(), self.opts.fit)
+                .context("the image is empty")?;
+        let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
+        let sheet = imaging::render(&photo, &placement);
+        let record = Record::of(self.paper, &placement);
+        let jpeg = imaging::encode_jpeg(&sheet, self.camera_exif.as_deref(), &[record.segment()])?;
+
+        let out_dir = &self.opts.out_dir;
+        let output = out_dir.join(output_name(source)?);
+        fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+        atomic::write(&output, jpeg)?;
+        Ok(Prepared { output, placement })
     }
 }
 
@@ -186,7 +179,7 @@ mod tests {
         let source = source_jpeg(&dir, "photo.v2.jpg", &exif_with_orientation(1));
         let out = dir.join("out");
 
-        let done = prepare_one(&source, &out, Paper::Postcard, &postcard(), None).unwrap();
+        let done = job(&dir, false).prepare(&source).unwrap();
         assert_eq!(done.output, out.join("photo.v2-selphy.jpg"));
         let written = image::open(&done.output).unwrap();
         assert_eq!((written.width(), written.height()), (1772, 1181));
@@ -206,7 +199,11 @@ mod tests {
             .chain(*b"camera")
             .collect::<Vec<u8>>();
 
-        let done = prepare_one(&source, &dir, Paper::Postcard, &postcard(), Some(&camera)).unwrap();
+        let job = Job {
+            camera_exif: Some(Arc::from(camera.clone())),
+            ..job(&dir, false)
+        };
+        let done = job.prepare(&source).unwrap();
         assert_eq!(exif_of(&done.output), Some(camera));
     }
 
@@ -216,7 +213,7 @@ mod tests {
         let bad = dir.join("broken.jpg");
         fs::write(&bad, b"not a jpeg").unwrap();
         let out = dir.join("out");
-        let err = prepare_one(&bad, &out, Paper::Postcard, &postcard(), None).unwrap_err();
+        let err = job(&dir, false).prepare(&bad).unwrap_err();
         assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
         assert!(!out.exists(), "nothing is written for a failed photo");
     }
@@ -226,6 +223,7 @@ mod tests {
             out_dir: dir.join("out"),
             archive_dir: archive.then(|| dir.join("originals")),
             camera_ref: None,
+            fit: Fit::Contain,
         }
     }
 
@@ -343,5 +341,19 @@ mod tests {
         assert_eq!(record.paper, Paper::L);
         // 119 x 89 mm at 300 ppi.
         assert_eq!(record.canvas_px, (1406, 1051));
+    }
+
+    #[test]
+    fn a_cover_job_fills_the_card_and_records_cover() {
+        let dir = fresh_dir("batch-cover");
+        let photo = write_jpeg(&dir.join("wide.jpg"), 320, 180, &exif_with_orientation(1));
+        let opts = Options {
+            fit: Fit::Cover,
+            ..options(&dir, false)
+        };
+        let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
+        let prepared = job.run_one(&photo).unwrap().prepared;
+        assert_eq!(prepared.placement.fit, Fit::Cover);
+        assert_eq!(Record::read(&prepared.output).unwrap().fit, Fit::Cover);
     }
 }

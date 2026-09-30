@@ -1,25 +1,31 @@
 //! The printer config file, and the env vars that override its values for
 //! one run. The paper resolves in this order: the caller's value (the
-//! command line), then `SELPHY_PAPER`, then the file, then postcard. Each
+//! command line), then `SELPHY_PAPER`, then the file, then postcard. The fit
+//! resolves in the same way, through `SELPHY_FIT`, to contain. Each
 //! profile value resolves as env, then file, then defaults. An override is
 //! never written to the file.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::fields::{FIELDS, Field};
 use super::{Config, Profile};
+use crate::geometry::Fit;
 use crate::paper::Paper;
 use crate::toml_file;
 
 /// The env var that names the paper.
 pub const PAPER_ENV: &str = "SELPHY_PAPER";
 
+/// The env var that names the fit.
+pub const FIT_ENV: &str = "SELPHY_FIT";
+
 const HEADER: &str = "\
-# selphy printer geometry: the default paper, and one table per calibrated
-# paper: [postcard], [l] or [card]. selphy rewrites this file, so comments
+# selphy printer geometry: the default paper and fit, and one table per
+# calibrated paper: [postcard], [l] or [card]. selphy rewrites this file, so comments
 # added by hand are not kept.
 # Trims are mm of canvas lost per edge, named for the landscape canvas:
 # long A = left, long B = right, short A = top, short B = bottom.
@@ -34,16 +40,20 @@ pub struct ConfigFile {
     env_values: Vec<(&'static Field, OsString)>,
     /// The raw value of `SELPHY_PAPER`, when it is set.
     env_paper: Option<OsString>,
+    /// The raw value of `SELPHY_FIT`, when it is set.
+    env_fit: Option<OsString>,
 }
 
-/// The config read from the file, the paper this run uses, and the
-/// overrides.
+/// The config read from the file, the paper and the fit this run uses, and
+/// the overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Loaded {
     /// The file's values. Start from this to edit the file.
     pub saved: Config,
     /// The paper this run uses.
     pub paper: Paper,
+    /// The fit this run uses.
+    pub fit: Fit,
     /// The overrides that are set, in the order of the field table. They
     /// apply to the profile of `paper`.
     pub overrides: Vec<Override>,
@@ -63,8 +73,8 @@ pub struct Override {
 impl ConfigFile {
     /// The config file this process uses: `explicit` if given, else
     /// `$XDG_CONFIG_HOME/selphy/printer.toml`, else
-    /// `~/.config/selphy/printer.toml`. Reads the env overrides and
-    /// `SELPHY_PAPER` once, now.
+    /// `~/.config/selphy/printer.toml`. Reads the env overrides,
+    /// `SELPHY_PAPER` and `SELPHY_FIT` once, now.
     pub fn locate(explicit: Option<PathBuf>) -> ConfigFile {
         let path = explicit.unwrap_or_else(|| {
             let base = std::env::var_os("XDG_CONFIG_HOME")
@@ -81,6 +91,7 @@ impl ConfigFile {
             path,
             env_values,
             env_paper: std::env::var_os(PAPER_ENV),
+            env_fit: std::env::var_os(FIT_ENV),
         }
     }
 
@@ -90,12 +101,13 @@ impl ConfigFile {
             path: path.into(),
             env_values: Vec::new(),
             env_paper: None,
+            env_fit: None,
         }
     }
 
     /// This file with the env vars in `pairs`: names and values, as if read
-    /// from the environment. A name is `SELPHY_PAPER` or the env var of a
-    /// field.
+    /// from the environment. A name is `SELPHY_PAPER`, `SELPHY_FIT` or the
+    /// env var of a field.
     ///
     /// # Panics
     ///
@@ -107,6 +119,10 @@ impl ConfigFile {
         for (name, value) in pairs {
             if name == PAPER_ENV {
                 self.env_paper = Some(value.into());
+                continue;
+            }
+            if name == FIT_ENV {
+                self.env_fit = Some(value.into());
                 continue;
             }
             let field = FIELDS
@@ -137,11 +153,13 @@ impl ConfigFile {
 
     /// Reads and checks the file, parses the overrides, and resolves the
     /// paper: `paper` if given, else `SELPHY_PAPER`, else the file's
-    /// `paper`, else postcard. A missing file gives the defaults.
+    /// `paper`, else postcard. The fit resolves in the same way: `fit`, else
+    /// `SELPHY_FIT`, else the file's `fit`, else contain. A missing file
+    /// gives the defaults.
     ///
     /// An old file with the profile keys at the top level is an error that
     /// says to move them into a `[postcard]` table.
-    pub fn load(&self, paper: Option<Paper>) -> Result<Loaded> {
+    pub fn load(&self, paper: Option<Paper>, fit: Option<Fit>) -> Result<Loaded> {
         let path = self.path.display();
         let table: toml::Table = toml_file::load_or_default(&self.path)?;
         if table.keys().any(|key| FIELDS.iter().any(|f| f.key == key)) {
@@ -159,14 +177,20 @@ impl ConfigFile {
         let overrides = self.parse_overrides()?;
         let paper = match paper {
             Some(paper) => paper,
-            None => self
-                .parse_env_paper()?
+            None => parse_env(PAPER_ENV, self.env_paper.as_ref())?
                 .or(saved.paper)
                 .unwrap_or(Paper::Postcard),
+        };
+        let fit = match fit {
+            Some(fit) => fit,
+            None => parse_env(FIT_ENV, self.env_fit.as_ref())?
+                .or(saved.fit)
+                .unwrap_or(Fit::Contain),
         };
         Ok(Loaded {
             saved,
             paper,
+            fit,
             overrides,
             path: self.path.clone(),
         })
@@ -200,21 +224,25 @@ impl ConfigFile {
         }
         Ok(parsed)
     }
+}
 
-    /// The paper in `SELPHY_PAPER`. An empty value counts as not set.
-    fn parse_env_paper(&self) -> Result<Option<Paper>> {
-        let Some(raw) = &self.env_paper else {
-            return Ok(None);
-        };
-        let text = raw.to_string_lossy();
-        let text = text.trim();
-        if text.is_empty() {
-            return Ok(None);
-        }
-        text.parse()
-            .map(Some)
-            .with_context(|| format!("{PAPER_ENV} = {text}"))
+/// The value of the env var `name`, whose raw value is `raw`. An empty value
+/// counts as not set.
+fn parse_env<T>(name: &str, raw: Option<&OsString>) -> Result<Option<T>>
+where
+    T: FromStr<Err = anyhow::Error>,
+{
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let text = raw.to_string_lossy();
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
     }
+    text.parse()
+        .map(Some)
+        .with_context(|| format!("{name} = {text}"))
 }
 
 impl Loaded {
@@ -288,7 +316,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_gives_postcard_and_its_defaults() {
-        let loaded = temp_file("config-missing").load(None).unwrap();
+        let loaded = temp_file("config-missing").load(None, None).unwrap();
         assert_eq!(loaded.saved, Config::default());
         assert_eq!(loaded.paper, Paper::Postcard);
         assert_eq!(loaded.saved_profile().unwrap(), postcard());
@@ -301,6 +329,7 @@ mod tests {
         let file = temp_file("config-roundtrip");
         let config = Config {
             paper: Some(Paper::L),
+            fit: Some(Fit::Cover),
             postcard: Some(Profile {
                 trim_short_a_mm: 1.8,
                 ..postcard()
@@ -310,10 +339,10 @@ mod tests {
         };
         file.save(&config).unwrap();
         assert!(file.exists().unwrap());
-        assert_eq!(file.load(None).unwrap().saved, config);
+        assert_eq!(file.load(None, None).unwrap().saved, config);
         let text = fs::read_to_string(file.path()).unwrap();
         assert!(text.starts_with("# selphy printer geometry"), "{text}");
-        assert!(text.contains("paper = \"l\"\n"), "{text}");
+        assert!(text.contains("paper = \"l\"\nfit = \"cover\"\n"), "{text}");
         assert!(text.contains("[postcard]\n"), "{text}");
         assert!(text.contains("[l]\n"), "{text}");
         assert!(!text.contains("\n[card]\n"), "{text}");
@@ -323,7 +352,7 @@ mod tests {
     fn an_l_table_alone_calibrates_l_and_leaves_postcard_at_its_defaults() {
         let file = temp_file("config-l-only");
         fs::write(file.path(), L_TABLE).unwrap();
-        let saved = file.load(None).unwrap().saved;
+        let saved = file.load(None, None).unwrap().saved;
         assert_eq!(saved.profile(Paper::L), Some(l_profile()));
         assert_eq!(saved.profile(Paper::Postcard), Some(postcard()));
         assert_eq!(saved.profile(Paper::Card), None);
@@ -339,7 +368,7 @@ mod tests {
              trim_short_b_mm = 0.0\n",
         )
         .unwrap();
-        let saved = file.load(None).unwrap().saved;
+        let saved = file.load(None, None).unwrap().saved;
         let postcard_profile = saved.profile(Paper::Postcard).unwrap();
         assert_eq!(postcard_profile.trim_long_a_mm, 4.0);
         assert_eq!(postcard_profile.trim_long_b_mm, postcard().trim_long_b_mm);
@@ -357,7 +386,7 @@ mod tests {
         for (paper, table) in [(Paper::L, "[l]\n"), (Paper::Card, "[card]\n")] {
             let file = temp_file(&format!("config-missing-trims-{paper}"));
             fs::write(file.path(), format!("{table}trim_long_a_mm = 1.5\n")).unwrap();
-            let err = format!("{:#}", file.load(None).unwrap_err());
+            let err = format!("{:#}", file.load(None, None).unwrap_err());
             assert!(
                 err.contains(&format!(
                     "[{paper}] trim_long_b_mm is missing: {paper} paper has no built-in trims. \
@@ -369,14 +398,14 @@ mod tests {
         // Postcard's missing trims take its built-in values.
         let file = temp_file("config-missing-trims-postcard");
         fs::write(file.path(), "[postcard]\ntrim_long_a_mm = 1.5\n").unwrap();
-        assert!(file.load(None).is_ok());
+        assert!(file.load(None, None).is_ok());
     }
 
     #[test]
     fn an_old_flat_file_says_to_move_the_keys_under_postcard() {
         let file = temp_file("config-flat");
         fs::write(file.path(), "trim_long_a_mm = 4.0\n").unwrap();
-        let err = file.load(None).unwrap_err();
+        let err = file.load(None, None).unwrap_err();
         assert_eq!(
             format!("{err:#}"),
             format!(
@@ -390,7 +419,7 @@ mod tests {
     #[test]
     fn the_paper_is_the_callers_then_the_envs_then_the_files_then_postcard() {
         let file = temp_file("config-paper-order");
-        let paper = |file: &ConfigFile, given| file.load(given).unwrap().paper;
+        let paper = |file: &ConfigFile, given| file.load(given, None).unwrap().paper;
         assert_eq!(paper(&file, None), Paper::Postcard);
 
         fs::write(file.path(), "paper = \"l\"\n").unwrap();
@@ -405,22 +434,50 @@ mod tests {
     }
 
     #[test]
+    fn the_fit_is_the_callers_then_the_envs_then_the_files_then_contain() {
+        let file = temp_file("config-fit-order");
+        let fit = |file: &ConfigFile, given| file.load(None, given).unwrap().fit;
+        assert_eq!(fit(&file, None), Fit::Contain);
+
+        fs::write(file.path(), "fit = \"cover\"\n").unwrap();
+        assert_eq!(fit(&file, None), Fit::Cover);
+
+        let with_env = file.clone().with_overrides([(FIT_ENV, "contain")]);
+        assert_eq!(fit(&with_env, None), Fit::Contain);
+        assert_eq!(fit(&with_env, Some(Fit::Cover)), Fit::Cover);
+
+        let empty_env = file.clone().with_overrides([(FIT_ENV, "")]);
+        assert_eq!(fit(&empty_env, None), Fit::Cover);
+    }
+
+    #[test]
+    fn an_unknown_fit_in_the_env_names_the_variable() {
+        let file = temp_file("config-fit-env-bad").with_overrides([(FIT_ENV, "fill")]);
+        let err = file.load(None, None).unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "SELPHY_FIT = fill: unknown fit \"fill\"; the fits are contain, cover"
+        );
+        assert_eq!(file.load(None, Some(Fit::Cover)).unwrap().fit, Fit::Cover);
+    }
+
+    #[test]
     fn an_unknown_paper_in_the_env_names_the_variable() {
         let file = temp_file("config-paper-env-bad").with_overrides([(PAPER_ENV, "a4")]);
-        let err = file.load(None).unwrap_err();
+        let err = file.load(None, None).unwrap_err();
         assert_eq!(
             format!("{err:#}"),
             "SELPHY_PAPER = a4: unknown paper \"a4\"; the papers are postcard, l, card"
         );
         // A paper from the caller wins, so the env var is not read.
-        assert_eq!(file.load(Some(Paper::L)).unwrap().paper, Paper::L);
+        assert_eq!(file.load(Some(Paper::L), None).unwrap().paper, Paper::L);
     }
 
     #[test]
     fn an_unknown_paper_in_the_file_is_an_error() {
         let file = temp_file("config-paper-file-bad");
         fs::write(file.path(), "paper = \"a4\"\n").unwrap();
-        let err = format!("{:#}", file.load(None).unwrap_err());
+        let err = format!("{:#}", file.load(None, None).unwrap_err());
         assert!(err.starts_with("parsing "), "{err}");
         assert!(err.contains("a4"), "{err}");
     }
@@ -428,7 +485,7 @@ mod tests {
     #[test]
     fn an_uncalibrated_paper_names_the_calibrate_command() {
         let loaded = temp_file("config-uncalibrated")
-            .load(Some(Paper::Card))
+            .load(Some(Paper::Card), None)
             .unwrap();
         for err in [
             loaded.saved_profile().unwrap_err(),
@@ -470,7 +527,7 @@ mod tests {
         for (i, (text, reason)) in cases.into_iter().enumerate() {
             let file = temp_file(&format!("config-invalid-{i}"));
             fs::write(file.path(), format!("{text}\n")).unwrap();
-            let err = file.load(None).unwrap_err();
+            let err = file.load(None, None).unwrap_err();
             assert!(format!("{err:#}").contains(reason), "{text}: {err:#}");
         }
     }
@@ -494,7 +551,7 @@ mod tests {
     fn unknown_keys_are_rejected() {
         let file = temp_file("config-typo");
         fs::write(file.path(), "papr = \"l\"\n").unwrap();
-        let err = file.load(None).unwrap_err();
+        let err = file.load(None, None).unwrap_err();
         assert!(format!("{err:#}").contains("papr"), "{err:#}");
     }
 
@@ -502,6 +559,7 @@ mod tests {
     fn with_profile_changes_one_table_and_keeps_the_others() {
         let before = Config {
             paper: Some(Paper::Card),
+            fit: None,
             postcard: Some(postcard()),
             l: None,
             card: Some(Paper::Card.starting_profile()),
@@ -526,7 +584,7 @@ mod tests {
             ("SELPHY_TRIM_LONG_A_MM", "3.25"),
             ("SELPHY_MAX_STRETCH_PCT", "0"),
         ]);
-        let loaded = file.load(None).unwrap();
+        let loaded = file.load(None, None).unwrap();
         assert_eq!(loaded.saved, Config::default());
         assert_eq!(loaded.saved_profile().unwrap(), postcard());
         assert_eq!(
@@ -557,7 +615,7 @@ mod tests {
     fn an_override_applies_to_the_chosen_papers_profile() {
         let file = temp_file("config-override-l").with_overrides([("SELPHY_MAX_STRETCH_PCT", "0")]);
         fs::write(file.path(), L_TABLE).unwrap();
-        let loaded = file.load(Some(Paper::L)).unwrap();
+        let loaded = file.load(Some(Paper::L), None).unwrap();
         assert_eq!(
             loaded.profile().unwrap(),
             Profile {
@@ -571,7 +629,7 @@ mod tests {
     fn an_empty_override_is_ignored() {
         let file =
             temp_file("config-override-empty").with_overrides([("SELPHY_TRIM_LONG_A_MM", "")]);
-        let loaded = file.load(None).unwrap();
+        let loaded = file.load(None, None).unwrap();
         assert_eq!(loaded.profile().unwrap(), postcard());
         assert!(loaded.overrides.is_empty());
     }
@@ -581,7 +639,7 @@ mod tests {
         for value in ["abc", "inf", "NaN"] {
             let file =
                 temp_file("config-override-nan").with_overrides([("SELPHY_TRIM_LONG_A_MM", value)]);
-            let err = file.load(None).unwrap_err();
+            let err = file.load(None, None).unwrap_err();
             assert_eq!(
                 format!("{err:#}"),
                 format!("SELPHY_TRIM_LONG_A_MM = {value}: not a number")
@@ -594,7 +652,7 @@ mod tests {
         let file =
             temp_file("config-override-invalid").with_overrides([("SELPHY_TRIM_LONG_A_MM", "200")]);
         fs::write(file.path(), "[postcard]\ntrim_long_a_mm = 4.0\n").unwrap();
-        let loaded = file.load(None).unwrap();
+        let loaded = file.load(None, None).unwrap();
         let err = format!("{:#}", loaded.profile().unwrap_err());
         assert!(
             err.contains("with SELPHY_TRIM_LONG_A_MM set: [postcard] "),
@@ -607,7 +665,7 @@ mod tests {
     fn save_of_saved_does_not_write_the_override() {
         let file =
             temp_file("config-override-save").with_overrides([("SELPHY_TRIM_LONG_A_MM", "3.25")]);
-        let loaded = file.load(None).unwrap();
+        let loaded = file.load(None, None).unwrap();
         let config = loaded
             .saved
             .with_profile(loaded.paper, loaded.saved_profile().unwrap());
@@ -616,7 +674,7 @@ mod tests {
         assert!(text.contains("trim_long_a_mm = 4.5"), "{text}");
         assert_eq!(
             ConfigFile::at(file.path())
-                .load(None)
+                .load(None, None)
                 .unwrap()
                 .saved_profile()
                 .unwrap(),
@@ -639,6 +697,7 @@ mod tests {
             "HOME",
             "SELPHY_TRIM_LONG_A_MM",
             PAPER_ENV,
+            FIT_ENV,
         ]
         .map(|name| (name, std::env::var_os(name)))
         .into();
@@ -648,6 +707,7 @@ mod tests {
             std::env::remove_var("XDG_CONFIG_HOME");
             std::env::set_var("SELPHY_TRIM_LONG_A_MM", "3.5");
             std::env::set_var(PAPER_ENV, "l");
+            std::env::set_var(FIT_ENV, "cover");
         }
         let home = ConfigFile::locate(None);
         // SAFETY: as above.
@@ -671,7 +731,7 @@ mod tests {
         );
         assert_eq!(xdg.path(), Path::new("/xdg/selphy/printer.toml"));
         assert_eq!(explicit.path(), mine);
-        let loaded = explicit.load(None).unwrap();
+        let loaded = explicit.load(None, None).unwrap();
         assert_eq!(
             loaded.overrides,
             [Override {
@@ -680,5 +740,6 @@ mod tests {
             }]
         );
         assert_eq!(loaded.paper, Paper::L);
+        assert_eq!(loaded.fit, Fit::Cover);
     }
 }

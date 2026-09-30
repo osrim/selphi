@@ -8,8 +8,8 @@ use anyhow::{Result, bail};
 use clap::Args;
 
 use selphy::config::fields::{CANVAS_LONG, CANVAS_SHORT, Field, MAX_STRETCH};
-use selphy::config::{ConfigFile, Loaded, Profile};
-use selphy::geometry::{self, Edge, Orientation, Trim};
+use selphy::config::{ConfigFile, FIT_ENV, Loaded, Profile};
+use selphy::geometry::{self, Edge, Fit, Orientation, Trim};
 use selphy::paper::Paper;
 use selphy::report::placement_summary;
 
@@ -24,6 +24,11 @@ pub struct ConfigArgs {
     /// Write the paper's values to the config file, for editing by hand.
     #[arg(long, conflicts_with = "path")]
     init: bool,
+
+    /// Show how the photo shapes land with this fit [default: the config's
+    /// `fit`, else contain]
+    #[arg(long, env = FIT_ENV, value_enum)]
+    fit: Option<Fit>,
 }
 
 /// Photo shapes shown by `selphy config`, as landscape pixel sizes.
@@ -49,7 +54,7 @@ pub fn run(
         return Ok(ExitCode::SUCCESS);
     }
     let exists = file.exists()?;
-    let loaded = file.load(paper)?;
+    let loaded = file.load(paper, args.fit)?;
     if args.init {
         if exists {
             bail!("{path} already exists");
@@ -64,8 +69,8 @@ pub fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// The config header, the paper, the canvas, the trims and the sample
-/// shapes, from the values this run uses.
+/// The config header, the paper, the fit, the canvas, the trims and the
+/// sample shapes, from the values this run uses.
 fn show(term: &mut Terminal, file: &ConfigFile, exists: bool, loaded: &Loaded) -> Result<()> {
     let profile = loaded.profile()?;
     let status = if exists {
@@ -93,6 +98,7 @@ fn show(term: &mut Terminal, file: &ConfigFile, exists: bool, loaded: &Loaded) -
         loaded.paper,
         calibrated.join(", ")
     )?;
+    writeln!(term.out, "Fit     {} ({})", loaded.fit, loaded.fit.label())?;
     writeln!(
         term.out,
         "Canvas  {}{} x {}{} mm, stretch up to {}%{}\n",
@@ -107,8 +113,8 @@ fn show(term: &mut Terminal, file: &ConfigFile, exists: bool, loaded: &Loaded) -
 
     writeln!(term.out, "\nHow a photo lands")?;
     for (shape, width, height) in SAMPLE_SHAPES {
-        let placement =
-            geometry::place(&profile, width, height).expect("sample sizes are non-zero");
+        let placement = geometry::place(&profile, width, height, loaded.fit)
+            .expect("sample sizes are non-zero");
         writeln!(term.out, "  {shape:<6}{}", placement_summary(&placement))?;
     }
     Ok(())
@@ -163,6 +169,7 @@ mod tests {
     const SHOW: ConfigArgs = ConfigArgs {
         path: false,
         init: false,
+        fit: None,
     };
 
     #[test]
@@ -177,7 +184,7 @@ mod tests {
         assert!(
             out.starts_with(&format!(
                 "Config  {}  (not found: using defaults)\nPaper   postcard (calibrated: postcard)\n\
-                 Canvas  150 x 100 mm, stretch up to 2.5%\n",
+                 Fit     contain (Whole photo)\nCanvas  150 x 100 mm, stretch up to 2.5%\n",
                 file.path().display()
             )),
             "{out}"
@@ -192,10 +199,7 @@ mod tests {
     #[test]
     fn init_writes_the_file_once() {
         let file = ConfigFile::at(fresh_dir("cli-config-init").join("printer.toml"));
-        let init = ConfigArgs {
-            path: false,
-            init: true,
-        };
+        let init = ConfigArgs { init: true, ..SHOW };
         let (mut term, written) = Terminal::scripted([]);
         assert_eq!(
             run(init, &mut term, &file, None).unwrap(),
@@ -204,10 +208,7 @@ mod tests {
         assert_eq!(written.out(), format!("Wrote {}\n", file.path().display()));
         assert!(file.exists().unwrap());
 
-        let again = ConfigArgs {
-            path: false,
-            init: true,
-        };
+        let again = ConfigArgs { init: true, ..SHOW };
         let err = run(again, &mut term, &file, None).unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -219,10 +220,7 @@ mod tests {
     fn init_saves_the_file_values_not_the_overrides() {
         let file = ConfigFile::at(fresh_dir("cli-config-init-env").join("printer.toml"))
             .with_overrides([("SELPHY_TRIM_LONG_A_MM", "3")]);
-        let init = ConfigArgs {
-            path: false,
-            init: true,
-        };
+        let init = ConfigArgs { init: true, ..SHOW };
         let (mut term, _) = Terminal::scripted([]);
         run(init, &mut term, &file, None).unwrap();
         let text = fs::read_to_string(file.path()).unwrap();
@@ -233,10 +231,7 @@ mod tests {
     #[test]
     fn path_prints_the_path() {
         let file = ConfigFile::at("/somewhere/printer.toml");
-        let args = ConfigArgs {
-            path: true,
-            init: false,
-        };
+        let args = ConfigArgs { path: true, ..SHOW };
         let (mut term, written) = Terminal::scripted([]);
         run(args, &mut term, &file, None).unwrap();
         assert_eq!(written.out(), "/somewhere/printer.toml\n");
@@ -289,10 +284,31 @@ mod tests {
         run(SHOW, &mut term, &file, Some(Paper::L)).unwrap();
         let out = written.out();
         assert!(
-            out.contains("\nPaper   l (calibrated: postcard, l)\nCanvas  121 x 89 mm, "),
+            out.contains("\nPaper   l (calibrated: postcard, l)\nFit     contain (Whole photo)\nCanvas  121 x 89 mm, "),
             "{out}"
         );
         assert!(out.contains("  left            1.5       0.0\n"), "{out}");
+    }
+
+    #[test]
+    fn fit_cover_shows_the_cut_edges_of_the_samples() {
+        let file = ConfigFile::at(fresh_dir("cli-config-cover").join("printer.toml"));
+        let (mut term, written) = Terminal::scripted([]);
+        let args = ConfigArgs {
+            fit: Some(Fit::Cover),
+            ..SHOW
+        };
+        run(args, &mut term, &file, None).unwrap();
+        let out = written.out();
+        assert!(out.contains("\nFit     cover (Fill card)\n"), "{out}");
+        for shape in ["4:3", "16:9"] {
+            let line = out
+                .lines()
+                .find(|line| line.starts_with(&format!("  {shape} ")))
+                .unwrap_or_else(|| panic!("no {shape} line: {out}"));
+            assert!(line.contains(", cut "), "{line}");
+            assert!(!line.contains("white"), "{line}");
+        }
     }
 
     #[test]

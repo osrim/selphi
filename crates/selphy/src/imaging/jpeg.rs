@@ -107,7 +107,13 @@ mod tests {
 
     /// An encoded blank sheet for a 3:2 landscape photo, and its placement.
     fn encoded(exif: Option<&[u8]>) -> (Vec<u8>, Placement) {
-        let p = crate::geometry::place(&crate::test_util::postcard(), 300, 200).unwrap();
+        let p = crate::geometry::place(
+            &crate::test_util::postcard(),
+            300,
+            200,
+            crate::geometry::Fit::Contain,
+        )
+        .unwrap();
         let sheet = crate::imaging::render(&RgbImage::new(1, 1), &p);
         (encode_jpeg(&sheet, exif, &[]).unwrap(), p)
     }

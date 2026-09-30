@@ -5,7 +5,7 @@
 use anyhow::{Result, bail};
 
 use crate::config::Profile;
-use crate::geometry::{Canvas, Edge, px_to_mm};
+use crate::geometry::{Canvas, Edge, Fit, px_to_mm};
 use crate::record::Record;
 
 /// The profile after measuring a print of the file that `record` came from.
@@ -54,10 +54,19 @@ pub fn apply_measurements(
 }
 
 /// Checks that a print of the file that `record` came from can correct
-/// `profile`: the profile's canvas must be the canvas the file was prepared
-/// on. Call it before asking for measurements, so that the user does not
-/// measure a print that cannot be used.
+/// `profile`: the file must be a contain print, because a cover print's
+/// margins do not show the trim, and the profile's canvas must be the canvas
+/// the file was prepared on. Call it before asking for measurements, so that
+/// the user does not measure a print that cannot be used.
 pub fn check_record(profile: &Profile, record: &Record) -> Result<()> {
+    if record.fit == Fit::Cover {
+        bail!(
+            "a {} print cannot be measured; prepare it with the {} fit (--fit {})",
+            Fit::Cover.label(),
+            Fit::Contain.label(),
+            Fit::Contain.name()
+        );
+    }
     let canvas = Canvas::new(profile, record.orientation);
     if (canvas.width, canvas.height) != record.canvas_px {
         bail!(
@@ -171,6 +180,21 @@ mod tests {
             message.contains("the top and bottom trims (150 mm) leave nothing of the 150 mm side"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_cover_print_is_refused() {
+        let cover: Record =
+            "v2 postcard cover portrait canvas=1181x1772 left=-10 top=-30 right=-10 bottom=-30"
+                .parse()
+                .unwrap();
+        let err = check_record(&old_profile(), &cover).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "a Fill card print cannot be measured; prepare it with the Whole photo fit (--fit \
+             contain)"
+        );
+        assert!(apply_measurements(&old_profile(), &cover, &[(Edge::Top, 1.0)]).is_err());
     }
 
     #[test]

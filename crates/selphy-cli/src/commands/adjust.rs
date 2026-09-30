@@ -29,7 +29,8 @@ pub struct AdjustArgs {
 /// computed from the record's margins, so starting from the file's values is
 /// right even when the photo was prepared with an env override.
 ///
-/// A file that cannot correct the profile is an error before the prompts.
+/// A file that cannot correct the profile, such as a Fill card print, is an
+/// error before the prompts.
 pub fn run(
     args: AdjustArgs,
     term: &mut Terminal,
@@ -45,7 +46,8 @@ pub fn run(
             record.paper
         )?;
     }
-    let loaded = file.load(Some(record.paper))?;
+    // The record names the paper and the fit, so the env and the file do not.
+    let loaded = file.load(Some(record.paper), Some(record.fit))?;
     let before = loaded.saved_profile()?;
     adjust::check_record(&before, &record)?;
 
@@ -91,6 +93,7 @@ mod tests {
     use std::path::Path;
 
     use selphy::config::{Config, Profile};
+    use selphy::geometry::Fit;
     use selphy::prepare::{Job, Options};
     use selphy::test_util::{fresh_dir, write_jpeg};
 
@@ -105,11 +108,17 @@ mod tests {
 
     /// A 16:9 photo prepared for `paper` with `profile`, in `dir`.
     fn prepared_for(dir: &Path, paper: Paper, profile: Profile) -> PathBuf {
+        prepared_with(dir, paper, profile, Fit::Contain)
+    }
+
+    /// A 16:9 photo prepared for `paper` with `profile` and `fit`, in `dir`.
+    fn prepared_with(dir: &Path, paper: Paper, profile: Profile, fit: Fit) -> PathBuf {
         let source = write_jpeg(&dir.join("wide.jpg"), 320, 180, &[]);
         let opts = Options {
             out_dir: dir.join("out"),
             archive_dir: None,
             camera_ref: None,
+            fit,
         };
         let done = Job::new(paper, profile, opts)
             .unwrap()
@@ -162,7 +171,7 @@ mod tests {
             "{out}"
         );
         assert!(out.ends_with("Saved.\n"), "{out}");
-        let saved = file.load(None).unwrap().saved_profile().unwrap();
+        let saved = file.load(None, None).unwrap().saved_profile().unwrap();
         assert_eq!(saved.trim_long_a_mm, 3.99);
         assert_eq!(saved.trim_long_b_mm, 5.8);
         assert_eq!(saved.trim_short_a_mm, 2.1);
@@ -260,12 +269,34 @@ mod tests {
                 photo.display()
             )
         );
-        let saved = file.load(None).unwrap().saved;
+        let saved = file.load(None, None).unwrap().saved;
         assert_eq!(saved.postcard, None, "postcard is untouched");
         let l = saved.l.unwrap();
         // The left and right margins are 24 px, 2.03 mm: trim = margin - white.
         assert_eq!(l.trim_long_a_mm, 1.53);
         assert_eq!(l.trim_long_b_mm, 2.03);
+    }
+
+    #[test]
+    fn a_fill_card_print_is_refused_before_the_prompts() {
+        let dir = fresh_dir("cli-adjust-cover");
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        let photo = prepared_with(
+            &dir,
+            Paper::Postcard,
+            Paper::Postcard.starting_profile(),
+            Fit::Cover,
+        );
+        let (mut term, written) = Terminal::scripted([]);
+
+        let err = run(AdjustArgs { file: photo }, &mut term, &file, None).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "a Fill card print cannot be measured; prepare it with the Whole photo fit (--fit \
+             contain)"
+        );
+        assert_eq!(written.out(), "");
     }
 
     #[test]

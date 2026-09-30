@@ -13,7 +13,9 @@ const SHARPEN_AMOUNT: f32 = 0.75;
 const SHARPEN_THRESHOLD: f32 = 0.008 * 255.0;
 
 /// Draws the photo onto a white canvas at `placement`: resized to the placed
-/// size (which may stretch one axis), then sharpened.
+/// size (which may stretch one axis), then sharpened. A cover picture is
+/// larger than the safe box and may reach past the canvas; the canvas clips
+/// it.
 pub fn render(photo: &RgbImage, placement: &Placement) -> RgbImage {
     let resized = imageops::resize(
         photo,
@@ -51,12 +53,13 @@ fn sharpen(image: &RgbImage) -> RgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::{Edge, Fit, place};
 
     #[test]
     fn render_puts_the_photo_exactly_at_the_placement() {
         let profile = crate::test_util::postcard();
         let photo = RgbImage::from_pixel(300, 200, Rgb([200, 0, 0]));
-        let p = crate::geometry::place(&profile, 300, 200).unwrap();
+        let p = place(&profile, 300, 200, Fit::Contain).unwrap();
         let sheet = render(&photo, &p);
 
         assert_eq!(i64::from(sheet.width()), p.canvas.width);
@@ -68,6 +71,27 @@ mod tests {
         assert_eq!(at(right, bottom), [200, 0, 0]);
         assert_eq!(at(left - 1, top), [255, 255, 255]);
         assert_eq!(at(right + 1, bottom), [255, 255, 255]);
+    }
+
+    #[test]
+    fn a_cover_picture_fills_the_safe_box_and_is_clipped_to_the_canvas() {
+        let profile = crate::test_util::postcard();
+        for (w, h) in [(320, 180), (180, 320), (300, 100)] {
+            let photo = RgbImage::from_pixel(w, h, Rgb([200, 0, 0]));
+            let p = place(&profile, w, h, Fit::Cover).unwrap();
+            assert!(p.x < 0 || p.y < 0, "{w}x{h} reaches past the canvas");
+            let sheet = render(&photo, &p);
+
+            let c = &p.canvas;
+            assert_eq!(i64::from(sheet.width()), c.width, "{w}x{h}");
+            assert_eq!(i64::from(sheet.height()), c.height, "{w}x{h}");
+            let (left, top) = (c.trim(Edge::Left), c.trim(Edge::Top));
+            let white = (top..top + c.safe_height())
+                .flat_map(|y| (left..left + c.safe_width()).map(move |x| (x, y)))
+                .filter(|&(x, y)| sheet.get_pixel(px(x), px(y)).0 == [255; 3])
+                .count();
+            assert_eq!(white, 0, "{w}x{h}: white pixels in the safe box");
+        }
     }
 
     #[test]

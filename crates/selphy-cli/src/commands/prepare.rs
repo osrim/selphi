@@ -8,7 +8,8 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::Args;
 
-use selphy::config::ConfigFile;
+use selphy::config::{ConfigFile, FIT_ENV};
+use selphy::geometry::Fit;
 use selphy::paper::Paper;
 use selphy::prepare::{self, Done, Job, Options};
 use selphy::report::{photo_error, placement_summary};
@@ -36,6 +37,10 @@ pub struct PrepareArgs {
     /// printers that reject edited files.
     #[arg(long, env = "CAMERA_REF")]
     camera_ref: Option<PathBuf>,
+
+    /// How a photo fills the card [default: the config's `fit`, else contain]
+    #[arg(long, env = FIT_ENV, value_enum)]
+    fit: Option<Fit>,
 }
 
 /// Prepares the photos for the paper, reporting each on stdout and each
@@ -61,7 +66,7 @@ pub fn run(
         (false, None) => reading_src.then(|| PathBuf::from("originals")),
     };
 
-    let loaded = file.load(paper)?;
+    let loaded = file.load(paper, args.fit)?;
     let profile = loaded.profile()?;
     let inputs = prepare::collect_inputs(&paths)?;
     if inputs.is_empty() {
@@ -76,6 +81,7 @@ pub fn run(
             out_dir: args.out,
             archive_dir,
             camera_ref: args.camera_ref,
+            fit: loaded.fit,
         },
     )?;
     let bar = term.progress(inputs.len())?;
@@ -113,7 +119,8 @@ pub fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// The line for a prepared photo: its orientation, stretch, and white.
+/// The line for a prepared photo: its orientation, stretch, and white or
+/// cut.
 fn done_line(source: &Path, done: &Done) -> String {
     let name = source.display();
     let p = &done.prepared.placement;
@@ -150,6 +157,7 @@ mod tests {
             archive: Some(dir.join("originals")),
             no_archive: false,
             camera_ref: None,
+            fit: None,
         }
     }
 
@@ -211,6 +219,41 @@ mod tests {
             "{}",
             written.out()
         );
+    }
+
+    #[test]
+    fn fit_cover_cuts_a_wide_photo() {
+        let dir = fresh_dir("cli-prepare-cover");
+        let photo = write_jpeg(&dir.join("wide.jpg"), 320, 180, &[]);
+        let (mut term, written) = Terminal::scripted([]);
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        let args = PrepareArgs {
+            fit: Some(Fit::Cover),
+            ..args(vec![photo], &dir)
+        };
+
+        let code = run(args, &mut term, &file, None).unwrap();
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let out = written.out();
+        assert!(
+            out.contains("landscape, stretched 2.4%, cut left "),
+            "{out}"
+        );
+        assert!(!out.contains("white"), "{out}");
+    }
+
+    #[test]
+    fn the_config_files_fit_is_used() {
+        let dir = fresh_dir("cli-prepare-cover-config");
+        let photo = write_jpeg(&dir.join("wide.jpg"), 320, 180, &[]);
+        let (mut term, written) = Terminal::scripted([]);
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        fs::write(file.path(), "fit = \"cover\"\n").unwrap();
+
+        run(args(vec![photo], &dir), &mut term, &file, None).unwrap();
+
+        assert!(written.out().contains("cut left "), "{}", written.out());
     }
 
     #[test]

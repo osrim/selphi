@@ -1,25 +1,70 @@
 //! The layout algorithm: where a picture goes on its canvas so that the
-//! printer's trim never reaches it.
+//! printer's trim never reaches it, or so that it fills the card.
 
-use super::canvas::{Canvas, Edge, Orientation, px_to_mm};
+use std::fmt;
+use std::str::FromStr;
+
+use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
+
+use super::canvas::{Canvas, Edge, Orientation, mm_to_px, px_to_mm};
 use crate::config::Profile;
 
+/// How far a cover picture reaches past the safe box into the trim zone on
+/// each edge, so that a trim that is a little off shows picture, not white.
+const BLEED_MM: f64 = 1.0;
+
 /// How a photo fills the safe box.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[serde(rename_all = "lowercase")]
 pub enum Fit {
-    /// The whole photo is shown, stretched on one axis by up to the max
-    /// stretch. The rest of the safe box is white.
+    /// Whole photo: stretched on one axis by up to the max stretch, with
+    /// white where its shape differs from the card's.
     Contain,
+    /// Fill card: covers the card edge to edge, and cuts off the parts of
+    /// the photo that do not fit.
+    Cover,
 }
 
 impl Fit {
     /// Every fit.
-    pub const ALL: [Fit; 1] = [Fit::Contain];
+    pub const ALL: [Fit; 2] = [Fit::Contain, Fit::Cover];
 
-    /// The lowercase name, as the placement record spells it.
+    /// The lowercase name, as the command line, the config file and the
+    /// placement record spell it.
     pub fn name(self) -> &'static str {
         match self {
             Self::Contain => "contain",
+            Self::Cover => "cover",
+        }
+    }
+
+    /// The name the user sees in the window and in `selphy config`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Contain => "Whole photo",
+            Self::Cover => "Fill card",
+        }
+    }
+}
+
+impl fmt::Display for Fit {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl FromStr for Fit {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match Fit::ALL.into_iter().find(|fit| fit.name() == s) {
+            Some(fit) => Ok(fit),
+            None => {
+                let names: Vec<&str> = Fit::ALL.map(Fit::name).into();
+                bail!("unknown fit {s:?}; the fits are {}", names.join(", "))
+            }
         }
     }
 }
@@ -39,10 +84,13 @@ pub struct Placement {
     pub height: i64,
     /// How far the picture's aspect was changed, in percent.
     pub stretch_pct: f64,
+    /// How the picture fills the safe box.
+    pub fit: Fit,
 }
 
 impl Placement {
-    /// Distance from the canvas edge to the picture edge.
+    /// Distance from the canvas edge to the picture edge. Negative when a
+    /// cover picture reaches past the canvas edge.
     pub fn margin(&self, edge: Edge) -> i64 {
         match edge {
             Edge::Left => self.x,
@@ -53,46 +101,95 @@ impl Placement {
     }
 
     /// White between the trim line and the picture: what should show on the
-    /// card. Never negative, because the picture stays inside the safe box.
+    /// card. Never negative: it is 0 where the picture reaches the trim line
+    /// or past it.
     pub fn white_mm(&self, edge: Edge) -> f64 {
-        px_to_mm(self.margin(edge) - self.canvas.trim(edge))
+        px_to_mm((self.margin(edge) - self.canvas.trim(edge)).max(0))
+    }
+
+    /// The picture lost past the safe box on `edge`, not counting the bleed:
+    /// what the fit cut off the photo. Never negative, and 0 for contain.
+    pub fn cut_mm(&self, edge: Edge) -> f64 {
+        let past_trim = (self.canvas.trim(edge) - self.margin(edge)).max(0);
+        px_to_mm((past_trim - bleed_px(&self.canvas, edge)).max(0))
     }
 }
 
-/// Places a `width` x `height` picture inside the safe box, uncropped.
+/// The bleed on `edge` in pixels: [`BLEED_MM`], clipped to the canvas.
+fn bleed_px(canvas: &Canvas, edge: Edge) -> i64 {
+    mm_to_px(BLEED_MM).min(canvas.trim(edge))
+}
+
+/// Places a `width` x `height` picture on the canvas with `fit`. Returns
+/// `None` for an empty picture.
 ///
-/// The picture is scaled uniformly to fit, then the axis that falls short is
-/// stretched by up to `max_stretch_pct`, because the card is not 2:3. It is
-/// centred on the safe box, not the canvas, since the trims are asymmetric.
-/// Returns `None` for an empty picture.
-pub fn place(profile: &Profile, width: u32, height: u32) -> Option<Placement> {
+/// Contain scales the picture uniformly to fit inside the safe box, then
+/// stretches the axis that falls short by up to `max_stretch_pct`, because
+/// the card is not 2:3. Cover scales it to cover the safe box plus the bleed,
+/// then squeezes the axis that overflows by up to the same cap, to lose as
+/// little of the photo as possible. Either way the picture is centred on the
+/// safe box, not the canvas, since the trims are asymmetric.
+pub fn place(profile: &Profile, width: u32, height: u32, fit: Fit) -> Option<Placement> {
     if width == 0 || height == 0 {
         return None;
     }
     let canvas = Canvas::new(profile, Orientation::of(width, height));
-    let (w, h) = (f64::from(width), f64::from(height));
-    let (box_w, box_h) = (canvas.safe_width() as f64, canvas.safe_height() as f64);
-
-    let scale = (box_w / w).min(box_h / h);
-    let (mut fit_w, mut fit_h) = (w * scale, h * scale);
-
+    let photo = (f64::from(width), f64::from(height));
     let max_factor = 1.0 + profile.max_stretch_pct / 100.0;
-    if box_w - fit_w > box_h - fit_h {
-        fit_w = (fit_w * max_factor).min(box_w);
-    } else {
-        fit_h = (fit_h * max_factor).min(box_h);
-    }
+    let (pw, ph) = match fit {
+        Fit::Contain => contain_size(&canvas, photo, max_factor),
+        Fit::Cover => cover_size(&canvas, photo, max_factor),
+    };
 
-    let (pw, ph) = (fit_w.round() as i64, fit_h.round() as i64);
+    let (w, h) = photo;
     let stretch_pct = ((pw as f64 / ph as f64) / (w / h) - 1.0).abs() * 100.0;
+    // For cover the difference is negative, and `/ 2` rounds it towards 0:
+    // the right and bottom edges get the odd pixel.
     Some(Placement {
         x: canvas.trim(Edge::Left) + (canvas.safe_width() - pw) / 2,
         y: canvas.trim(Edge::Top) + (canvas.safe_height() - ph) / 2,
         width: pw,
         height: ph,
         stretch_pct,
+        fit,
         canvas,
     })
+}
+
+/// The contain size of a `(w, h)` photo: inside the safe box.
+fn contain_size(canvas: &Canvas, (w, h): (f64, f64), max_factor: f64) -> (i64, i64) {
+    let (box_w, box_h) = (canvas.safe_width() as f64, canvas.safe_height() as f64);
+    let scale = (box_w / w).min(box_h / h);
+    let (mut fit_w, mut fit_h) = (w * scale, h * scale);
+    if box_w - fit_w > box_h - fit_h {
+        fit_w = (fit_w * max_factor).min(box_w);
+    } else {
+        fit_h = (fit_h * max_factor).min(box_h);
+    }
+    (fit_w.round() as i64, fit_h.round() as i64)
+}
+
+/// The cover size of a `(w, h)` photo: over the safe box plus the bleed. The
+/// picture is centred, so each axis bleeds by the larger bleed of its two
+/// edges on both of them.
+fn cover_size(canvas: &Canvas, (w, h): (f64, f64), max_factor: f64) -> (i64, i64) {
+    let bleed = |a, b| 2 * bleed_px(canvas, a).max(bleed_px(canvas, b));
+    let need_w = (canvas.safe_width() + bleed(Edge::Left, Edge::Right)) as f64;
+    let need_h = (canvas.safe_height() + bleed(Edge::Top, Edge::Bottom)) as f64;
+    let scale = (need_w / w).max(need_h / h);
+    let (mut fit_w, mut fit_h) = (w * scale, h * scale);
+    if fit_w - need_w > fit_h - need_h {
+        fit_w = (fit_w / max_factor).max(need_w);
+    } else {
+        fit_h = (fit_h / max_factor).max(need_h);
+    }
+    (round_up(fit_w), round_up(fit_h))
+}
+
+/// Rounds up, so that a cover picture never falls a pixel short. The
+/// tolerance keeps an exact size from gaining a pixel through float error.
+fn round_up(px: f64) -> i64 {
+    (px - 1e-6).ceil() as i64
 }
 
 #[cfg(test)]
@@ -119,7 +216,7 @@ mod tests {
 
     #[test]
     fn two_by_three_fills_the_safe_box() {
-        let p = place(&postcard(), 3616, 5424).unwrap();
+        let p = place(&postcard(), 3616, 5424, Fit::Contain).unwrap();
         assert_eq!((p.x, p.y, p.width, p.height), (32, 53, 1124, 1654));
         assert!((p.stretch_pct - 1.9).abs() < 0.05, "{}", p.stretch_pct);
         for edge in Edge::ALL {
@@ -131,7 +228,7 @@ mod tests {
     fn no_picture_ever_reaches_the_trim() {
         let profile = postcard();
         for (w, h) in SIZES {
-            let p = place(&profile, w, h).unwrap();
+            let p = place(&profile, w, h, Fit::Contain).unwrap();
             for edge in Edge::ALL {
                 assert!(
                     p.margin(edge) >= p.canvas.trim(edge),
@@ -147,7 +244,7 @@ mod tests {
 
     #[test]
     fn wide_pictures_keep_white_on_the_short_axis() {
-        let p = place(&postcard(), 1920, 1080).unwrap();
+        let p = place(&postcard(), 1920, 1080, Fit::Contain).unwrap();
         assert_eq!(p.white_mm(Edge::Left), 0.0);
         assert_eq!(p.white_mm(Edge::Right), 0.0);
         assert!(p.white_mm(Edge::Top) > 7.0);
@@ -165,13 +262,96 @@ mod tests {
             ((1480, 1000), (1654, 1124)),
         ];
         for ((w, h), expected) in cases {
-            let p = place(&profile, w, h).unwrap();
+            let p = place(&profile, w, h, Fit::Contain).unwrap();
             assert_eq!((p.width, p.height), expected, "{w}x{h}");
         }
     }
 
     #[test]
     fn empty_picture_has_no_placement() {
-        assert_eq!(place(&postcard(), 0, 100), None);
+        for fit in Fit::ALL {
+            assert_eq!(place(&postcard(), 0, 100, fit), None);
+        }
+    }
+
+    #[test]
+    fn cover_covers_the_safe_box_and_the_bleed() {
+        let profile = postcard();
+        for (w, h) in SIZES {
+            let p = place(&profile, w, h, Fit::Cover).unwrap();
+            assert_eq!(p.fit, Fit::Cover);
+            for edge in Edge::ALL {
+                let past_trim = p.canvas.trim(edge) - p.margin(edge);
+                assert!(
+                    past_trim >= bleed_px(&p.canvas, edge),
+                    "{w}x{h}: {edge:?} reaches {past_trim} px past the trim"
+                );
+                assert_eq!(p.white_mm(edge), 0.0, "{w}x{h}: {edge:?}");
+            }
+            assert!(p.stretch_pct <= profile.max_stretch_pct + 0.1, "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn cover_bleeds_to_the_canvas_edge_where_the_trim_is_smaller() {
+        // L starts with no trims: the safe box is the canvas, so there is
+        // no bleed and nothing past the canvas on the axis that fits.
+        let profile = crate::paper::Paper::L.starting_profile();
+        let p = place(&profile, 1920, 1080, Fit::Cover).unwrap();
+        assert_eq!((p.y, p.height), (0, p.canvas.height));
+        assert!(p.x < 0, "{}", p.x);
+    }
+
+    #[test]
+    fn contain_cuts_nothing() {
+        for (w, h) in SIZES {
+            let p = place(&postcard(), w, h, Fit::Contain).unwrap();
+            for edge in Edge::ALL {
+                assert_eq!(p.cut_mm(edge), 0.0, "{w}x{h}: {edge:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_two_by_three_photo_is_not_cut_by_contain_and_by_a_pixel_at_most_by_cover() {
+        let contain = place(&postcard(), 3616, 5424, Fit::Contain).unwrap();
+        let cover = place(&postcard(), 3616, 5424, Fit::Cover).unwrap();
+        // Cover would need a 2.6% stretch to add the bleed without a cut; the
+        // cap is 2.5%, so one pixel goes past the bleed at the top and bottom.
+        for edge in Edge::ALL {
+            assert_eq!(contain.cut_mm(edge), 0.0, "{edge:?}");
+            assert!(cover.cut_mm(edge) <= px_to_mm(1), "{edge:?}");
+        }
+        assert_eq!(cover.cut_mm(Edge::Left), 0.0);
+    }
+
+    #[test]
+    fn cover_cuts_a_wide_photo_equally_on_the_left_and_right() {
+        let p = place(&postcard(), 1920, 1080, Fit::Cover).unwrap();
+        let (left, right) = (p.cut_mm(Edge::Left), p.cut_mm(Edge::Right));
+        assert!(left > 3.0, "{left}");
+        assert!((left - right).abs() <= px_to_mm(1), "{left} vs {right}");
+        assert_eq!(p.cut_mm(Edge::Top), 0.0);
+        assert_eq!(p.cut_mm(Edge::Bottom), 0.0);
+    }
+
+    #[test]
+    fn fit_names_round_trip_through_serde_and_from_str() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct Holder {
+            fit: Fit,
+        }
+        for fit in Fit::ALL {
+            let text = toml::to_string(&Holder { fit }).unwrap();
+            assert_eq!(text, format!("fit = \"{}\"\n", fit.name()));
+            assert_eq!(toml::from_str::<Holder>(&text).unwrap().fit, fit);
+            assert_eq!(fit.name().parse::<Fit>().unwrap(), fit);
+        }
+        assert_eq!(Fit::ALL.map(Fit::label), ["Whole photo", "Fill card"]);
+        let err = "stretch".parse::<Fit>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "unknown fit \"stretch\"; the fits are contain, cover"
+        );
     }
 }

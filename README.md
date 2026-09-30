@@ -6,7 +6,8 @@ printer's edge trim never crops the picture.
 In Borderless mode the SELPHY enlarges the image and cuts 2–6 mm off each
 edge. `selphy` measures that loss once, then places every photo inside the
 part of the page that reaches the card. Nothing of the picture is lost; the
-leftover space is white.
+leftover space is white. With the Fill card fit (`--fit cover`), the photo
+covers the card edge to edge instead, and the parts that do not fit are cut.
 
 ## Install
 
@@ -59,6 +60,7 @@ selphy prepare -o prints/ trip/      # write somewhere else than out/
 | `--archive <DIR>` | Move each finished source here. Default: `originals` when reading `src`; no archiving when paths are named. |
 | `--no-archive` | Leave finished sources where they are. |
 | `--camera-ref <FILE>` | An unedited camera JPEG. Its Exif is written into every output, for printers that reject edited files. Also read from `$CAMERA_REF`. |
+| `--fit <contain\|cover>` | How a photo fills the card: `contain` (Whole photo) or `cover` (Fill card). Default: the config's `fit`, else `contain`. Also read from `$SELPHY_FIT`. |
 
 Paths are relative to the current directory.
 
@@ -70,6 +72,11 @@ For each photo, `prepare`:
 3. Scales the photo to fit the part of the canvas that survives the trim.
    The side that falls short is stretched by up to 2.5%, because the card is
    not 2:3. A 2:3 photo needs 1.9% and fills the card edge to edge.
+   With `--fit cover`, the photo instead covers that part plus 1 mm into the
+   trim on each edge, so that a trim that is a little off shows picture and
+   not white. The side that overflows is squeezed by up to 2.5%, to cut as
+   little as possible. The photo is centred, so both ends of the long side
+   lose the same amount.
 4. Sharpens, and writes a 300 dpi baseline JPEG at the paper's canvas size
    (150x100 mm for postcard), with 4:2:0 chroma, to `out/<name>-selphy.jpg`. Only the last extension is replaced:
    `photo.v2.png` becomes `photo.v2-selphy.jpg`.
@@ -85,7 +92,9 @@ the `._name.jpg` files macOS writes on external drives, are skipped.
 
 A photo that fails is reported on stderr and left where it was; the other
 photos are still prepared. The output reports each photo, prepared ones on
-stdout and failed ones on stderr:
+stdout and failed ones on stderr. A contain photo reports the white on each
+edge; a cover photo reports the photo cut off on each edge, not counting the
+1 mm into the trim, as in `stretched 2.4%, cut left 13.3, right 13.3 mm`:
 
 ```
 ✓ src/a.jpg  portrait, stretched 1.9%, edge to edge
@@ -106,7 +115,8 @@ A window for `prepare`. Drop photos or folders on it, or use Add…. Choose the
 folder the prints go to (on macOS it starts at `~/Pictures`), then Prepare.
 Each photo shows its result or its error. Cancel stops the run after the
 photo in progress. Sources are not moved, and no camera reference is used. It
-prepares for the paper that `selphy prepare` uses without `--paper`.
+prepares for the paper and with the fit that `selphy prepare` uses without
+`--paper` and `--fit`.
 
 The gear button (Cmd-,) opens the Config dialog. It has two sections:
 
@@ -129,11 +139,12 @@ until Save.
 
 ### `selphy config`
 
-Shows the config file, the paper and the papers that are calibrated, and for
-the paper: the canvas, the trim on each edge in both orientations, and how
-common photo shapes land on the card. `selphy config --paper l` shows the L
-profile; an uncalibrated paper is an error. The values are the ones this run
-uses:
+Shows the config file, the paper and the papers that are calibrated, the fit,
+and for the paper: the canvas, the trim on each edge in both orientations, and
+how common photo shapes land on the card with the fit. `selphy config --paper l`
+shows the L profile; an uncalibrated paper is an error. `selphy config --fit
+cover` shows how the shapes land with the Fill card fit. The values are the
+ones this run uses:
 when env vars override values, an `Env` line under the header lists them, and
 each overridden value is marked with `(from SELPHY_…)`. In the trim
 table, the mark also names the column, as in `(portrait from SELPHY_…)`.
@@ -142,6 +153,7 @@ table, the mark also names the column, as in `(portrait from SELPHY_…)`.
 $ selphy config
 Config  ~/.config/selphy/printer.toml  (not found: using defaults)
 Paper   postcard (calibrated: postcard)
+Fit     contain (Whole photo)
 Canvas  150 x 100 mm, stretch up to 2.5%
 
 Trim, mm    landscape  portrait
@@ -161,6 +173,7 @@ How a photo lands
 |---|---|
 | `--path` | Print only the config file's path. |
 | `--init` | Write the paper's values to the config file, for editing by hand. Env overrides are not written. Fails if the file exists. |
+| `--fit <contain\|cover>` | Show the photo shapes with this fit. Default: the config's `fit`, else `contain`. Also read from `$SELPHY_FIT`. |
 
 ### `selphy calibrate`
 
@@ -225,7 +238,9 @@ canvas side.
 
 The file must hold a placement record, which only `selphy prepare` writes.
 `adjust` refuses a file made by an older selphy, and a file whose canvas
-differs from the paper's current canvas: prepare and print it again. The
+differs from the paper's current canvas: prepare and print it again. It also
+refuses a Fill card print, because its margins do not show the trim: prepare
+the photo with `--fit contain` to measure it. The
 prompts need a terminal.
 
 `calibrate` and `adjust` save the file's values with the new trims, never the
@@ -249,20 +264,22 @@ terminal" hint, override warnings and `error: …`.
 ## Configuration
 
 Each value is resolved in this order: command line, then env, then the config
-file, then the defaults. On the command line, `--config` chooses the file and
-`--paper` the paper; env vars set single values.
+file, then the defaults. On the command line, `--config` chooses the file,
+`--paper` the paper and `--fit` the fit; env vars set single values.
 
 The config file is `~/.config/selphy/printer.toml`. `$XDG_CONFIG_HOME` moves
 it. `--config <FILE>` names the file directly, and so does `$SELPHY_CONFIG`;
 the flag wins over the env var.
 
-The file holds the default paper and one table per calibrated paper:
+The file holds the default paper, the default fit and one table per
+calibrated paper:
 `[postcard]`, `[l]` and `[card]`. Each table is a profile: the canvas, the
 four trims and the max stretch. Without a file, postcard uses the defaults
 below, and L and card are not calibrated.
 
 ```toml
 paper = "postcard"       # the default paper: postcard, l or card
+fit = "contain"          # the default fit: contain or cover
 
 [postcard]
 canvas_long_mm = 150.0   # the canvas sent to the printer, not 4x6 inch
@@ -275,7 +292,8 @@ max_stretch_pct = 2.5    # largest one-axis stretch
 ```
 
 The paper is resolved as `--paper`, then `$SELPHY_PAPER`, then `paper` in the
-file, then postcard. Keys left out of a `[postcard]` table take the defaults
+file, then postcard. The fit is resolved as `--fit`, then `$SELPHY_FIT`, then
+`fit` in the file, then contain. Keys left out of a `[postcard]` table take the defaults
 above. An `[l]` or `[card]` table must have all four trims, because those
 papers have no built-in trims; a canvas or stretch left out takes the size of
 the paper (L 119 x 89 mm, card 86 x 54 mm) or 2.5 %. Unknown keys are an
@@ -300,6 +318,7 @@ print on.
 | Env var | Overrides |
 |---|---|
 | `SELPHY_PAPER` | `paper` |
+| `SELPHY_FIT` | `fit` |
 | `SELPHY_CANVAS_LONG_MM` | `canvas_long_mm` |
 | `SELPHY_CANVAS_SHORT_MM` | `canvas_short_mm` |
 | `SELPHY_TRIM_LONG_A_MM` | `trim_long_a_mm` |
@@ -309,7 +328,8 @@ print on.
 | `SELPHY_MAX_STRETCH_PCT` | `max_stretch_pct` |
 
 `selphy-gui` uses the same file (`$SELPHY_CONFIG` if set), the same paper
-(`$SELPHY_PAPER`, else the file's `paper`) and the same overrides when it
+(`$SELPHY_PAPER`, else the file's `paper`), the same fit (`$SELPHY_FIT`, else
+the file's `fit`) and the same overrides when it
 prepares photos. Its Config dialog shows and saves the file's postcard
 values, without the overrides, and keeps the other tables.
 

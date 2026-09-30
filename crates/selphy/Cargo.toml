@@ -16,7 +16,7 @@ serde.workspace = true
 toml.workspace = true
 
 [features]
-# The clap `ValueEnum` derive on `Paper`, for the command line.
+# The clap `ValueEnum` derive on `Paper` and `Fit`, for the command line.
 clap = ["dep:clap"]
 # The test helpers, for the tests of the CLI and the GUI.
 test-util = []

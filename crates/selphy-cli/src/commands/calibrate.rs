@@ -11,7 +11,7 @@ use clap::{Args, ValueEnum};
 
 use selphy::calibrate::{self, CANDIDATES_MM};
 use selphy::config::{ConfigFile, Profile};
-use selphy::geometry::{Edge, Orientation, Trim};
+use selphy::geometry::{Edge, Fit, Orientation, Trim};
 use selphy::paper::Paper;
 
 use crate::terminal::{Terminal, confirm_save, print_changes};
@@ -68,7 +68,8 @@ pub fn run(
     paper: Option<Paper>,
 ) -> Result<ExitCode> {
     let orientation = Orientation::from(args.orientation);
-    let loaded = file.load(paper)?;
+    // Sheets have no picture, so the fit is not read.
+    let loaded = file.load(paper, Some(Fit::Contain))?;
     let paper = loaded.paper;
     let before = loaded
         .saved
@@ -243,7 +244,7 @@ mod tests {
         assert!(out.contains("  top                 2.10   2.10\n"), "{out}");
         assert!(out.ends_with("Saved.\n"), "{out}");
         assert_eq!(
-            file.load(None)
+            file.load(None, None)
                 .unwrap()
                 .saved_profile()
                 .unwrap()
@@ -352,7 +353,7 @@ mod tests {
             "{}",
             written.out()
         );
-        let saved = file.load(None).unwrap().saved;
+        let saved = file.load(None, None).unwrap().saved;
         assert_eq!(saved.postcard, before.postcard);
         assert_eq!(
             saved.l,

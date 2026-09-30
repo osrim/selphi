@@ -21,6 +21,7 @@ use selphy::config::fields::{
     TRIM_SHORT_A, TRIM_SHORT_B,
 };
 use selphy::config::{Config, ConfigFile, Profile};
+use selphy::geometry::Fit;
 use selphy::paper::Paper;
 use selphy::toml_file;
 
@@ -97,7 +98,7 @@ impl ConfigPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (saved, error) = match config.load(None) {
+        let (saved, error) = match config.load(None, Some(Fit::Contain)) {
             Ok(loaded) => (loaded.saved, None),
             Err(err) => (
                 Config::default(),

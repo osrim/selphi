@@ -45,7 +45,7 @@ impl Record {
         let canvas = &placement.canvas;
         Self {
             paper,
-            fit: Fit::Contain,
+            fit: placement.fit,
             orientation: canvas.orientation,
             canvas_px: (canvas.width, canvas.height),
             margins: Edge::ALL.map(|edge| placement.margin(edge)),
@@ -187,7 +187,7 @@ mod tests {
     use image::{Rgb, RgbImage};
 
     fn portrait() -> Placement {
-        place(&postcard(), 3616, 5424).unwrap()
+        place(&postcard(), 3616, 5424, Fit::Contain).unwrap()
     }
 
     #[test]
@@ -210,6 +210,17 @@ mod tests {
         assert_eq!(record.canvas_px, (1181, 1772));
         let text = record.to_string();
         assert!(text.starts_with("v2 card contain portrait "), "{text}");
+    }
+
+    #[test]
+    fn a_cover_record_says_cover_and_keeps_its_negative_margins() {
+        let p = place(&postcard(), 1920, 1080, Fit::Cover).unwrap();
+        let record = Record::of(Paper::Postcard, &p);
+        assert_eq!(record.fit, Fit::Cover);
+        assert!(record.margin_px(Edge::Left) < 0);
+        let text = record.to_string();
+        assert!(text.starts_with("v2 postcard cover landscape "), "{text}");
+        assert_eq!(text.parse::<Record>().unwrap(), record);
     }
 
     #[test]
@@ -255,7 +266,7 @@ mod tests {
         ];
         let mut orientations = Vec::new();
         for (w, h) in sizes {
-            let p = place(&profile, w, h).unwrap();
+            let p = place(&profile, w, h, Fit::Contain).unwrap();
             let record = Record::of(Paper::Postcard, &p);
             orientations.push(record.orientation);
             for edge in Edge::ALL {
