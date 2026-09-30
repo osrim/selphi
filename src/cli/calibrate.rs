@@ -14,7 +14,7 @@ use selphy::calibrate::{self, CANDIDATES_MM};
 use selphy::config::{self, Config};
 use selphy::geometry::{Edge, Orientation, Trim};
 
-use super::report::{answer, print_changes};
+use super::report::{answer, confirm_save, print_changes};
 
 #[derive(Args)]
 pub struct CalibrateArgs {
@@ -96,15 +96,7 @@ pub fn run(args: CalibrateArgs) -> Result<ExitCode> {
     let updated = calibrate::apply_readings(&cfg, orientation, &readings);
     print_changes(&cfg, &updated, orientation);
 
-    let save = Confirm::new(&format!("Save to {}?", path.display()))
-        .with_default(true)
-        .prompt();
-    if answer(save)? {
-        updated.save(&path)?;
-        println!("Saved.");
-    } else {
-        println!("Not saved.");
-    }
+    confirm_save(&updated, &path)?;
     Ok(ExitCode::SUCCESS)
 }
 

@@ -1,7 +1,9 @@
 //! Text formatting and prompt handling shared by the commands.
 
+use std::path::Path;
+
 use anyhow::{Result, bail};
-use inquire::InquireError;
+use inquire::{Confirm, InquireError};
 
 use selphy::config::Config;
 use selphy::geometry::{Edge, Orientation, Placement, Trim};
@@ -43,6 +45,20 @@ pub fn print_changes(before: &Config, after: &Config, orientation: Orientation) 
         let mark = if old == new { "" } else { "  *" };
         println!("  {:<18}{old:>6.2}{new:>7.2}{mark}", edge.name());
     }
+}
+
+/// Asks whether to save `updated` to `path`, and saves it on yes.
+pub fn confirm_save(updated: &Config, path: &Path) -> Result<()> {
+    let save = Confirm::new(&format!("Save to {}?", path.display()))
+        .with_default(true)
+        .prompt();
+    if answer(save)? {
+        updated.save(path)?;
+        println!("Saved.");
+    } else {
+        println!("Not saved.");
+    }
+    Ok(())
 }
 
 /// A prompt's answer, with Esc, Ctrl-C and a missing terminal turned into

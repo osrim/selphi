@@ -6,15 +6,15 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::Args;
+use inquire::CustomType;
 use inquire::validator::Validation;
-use inquire::{Confirm, CustomType};
 
 use selphy::adjust;
 use selphy::config::{self, Config};
 use selphy::geometry::{Edge, px_to_mm};
 use selphy::record::Record;
 
-use super::report::{answer, print_changes};
+use super::report::{answer, confirm_save, print_changes};
 
 #[derive(Args)]
 pub struct AdjustArgs {
@@ -43,15 +43,7 @@ pub fn run(args: AdjustArgs) -> Result<ExitCode> {
     let updated = adjust::apply_measurements(&cfg, &record, &measured)?;
     print_changes(&cfg, &updated, record.orientation);
 
-    let save = Confirm::new(&format!("Save to {}?", path.display()))
-        .with_default(true)
-        .prompt();
-    if answer(save)? {
-        updated.save(&path)?;
-        println!("Saved.");
-    } else {
-        println!("Not saved.");
-    }
+    confirm_save(&updated, &path)?;
     Ok(ExitCode::SUCCESS)
 }
 
