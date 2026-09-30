@@ -59,7 +59,7 @@ impl Record {
                     .then_some(data)
                     .and_then(|data| data.strip_prefix(SIGNATURE))
             })
-            .context("no placement record; is this a file made by `selphy prepare`?")?;
+            .context("no placement record; only files made by `selphy prepare` have one")?;
         let text = std::str::from_utf8(payload).context("the placement record is not text")?;
         text.parse()
     }

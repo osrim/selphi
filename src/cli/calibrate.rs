@@ -6,13 +6,15 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::{Args, ValueEnum};
-use inquire::{Confirm, InquireError, Select};
+use inquire::{Confirm, Select};
 
 use selphy::calibrate::{self, CANDIDATES_MM};
 use selphy::config::{self, Config};
 use selphy::geometry::{Edge, Orientation, Trim};
+
+use super::report::{answer, print_changes};
 
 #[derive(Args)]
 pub struct CalibrateArgs {
@@ -164,31 +166,6 @@ fn nearest_candidate(mm: f64) -> usize {
         .enumerate()
         .min_by(|(_, a), (_, b)| (*a - mm).abs().total_cmp(&(*b - mm).abs()))
         .map_or(0, |(i, _)| i)
-}
-
-fn print_changes(before: &Config, after: &Config, orientation: Orientation) {
-    println!("\nTrim, mm ({})   before  after", orientation.name());
-    for edge in Edge::ALL {
-        let trim = Trim::at(orientation, edge);
-        let (old, new) = (trim.mm(before), trim.mm(after));
-        let mark = if old == new { "" } else { "  *" };
-        println!("  {:<18}{old:>6.1}{new:>7.1}{mark}", edge.name());
-    }
-}
-
-/// A prompt's answer, with Esc, Ctrl-C and a missing terminal turned into
-/// plain errors.
-fn answer<T>(result: Result<T, InquireError>) -> Result<T> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
-            bail!("cancelled; nothing saved")
-        }
-        Err(InquireError::NotTTY) => {
-            bail!("entering readings needs a terminal; --sheet-only writes the sheet without one")
-        }
-        Err(err) => Err(err.into()),
-    }
 }
 
 #[cfg(test)]

@@ -25,6 +25,8 @@ enum Command {
     Config(cli::config::ConfigArgs),
     /// Measure the printer's trim: print a bracket sheet, then enter what survived.
     Calibrate(cli::calibrate::CalibrateArgs),
+    /// Correct the trims from a printed photo: enter the white or loss on each edge.
+    Adjust(cli::adjust::AdjustArgs),
 }
 
 fn main() -> ExitCode {
@@ -33,6 +35,7 @@ fn main() -> ExitCode {
         Command::Prepare(args) => cli::prepare::run(args),
         Command::Config(args) => cli::config::run(args),
         Command::Calibrate(args) => cli::calibrate::run(args),
+        Command::Adjust(args) => cli::adjust::run(args),
     };
     result.unwrap_or_else(|err| {
         eprintln!("error: {err:#}");
