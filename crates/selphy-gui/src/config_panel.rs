@@ -17,10 +17,9 @@ use gpui_kit::{
 };
 
 use selphy::config::{self, Config};
-use selphy::report::error_chain;
 
 use crate::appearance::{self, Appearance, ThemeChoice};
-use crate::batch_view::sentence;
+use crate::batch_view::error_sentence;
 
 /// One editable value: its label, unit, and place in `Config`.
 struct Setting {
@@ -89,7 +88,7 @@ impl ConfigPanel {
             Ok(cfg) => (cfg, None),
             Err(err) => (
                 Config::default(),
-                Some(format!("{} Saving replaces the file.", sentence(error_chain(&err))).into()),
+                Some(format!("{} Saving replaces the file.", error_sentence(&err)).into()),
             ),
         };
         let mut input = |setting: &Setting| {
@@ -119,7 +118,7 @@ impl ConfigPanel {
         let result = self.read(cx).and_then(|cfg| {
             cfg.save(&self.printer_path)
                 .and_then(|()| appearance.save(&appearance::default_path()))
-                .map_err(|err| format!("Couldn't save. {}", sentence(error_chain(&err))))
+                .map_err(|err| format!("Couldn't save. {}", error_sentence(&err)))
         });
         match result {
             Ok(()) => Some(self.theme),

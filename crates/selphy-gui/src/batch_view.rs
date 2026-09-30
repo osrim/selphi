@@ -20,8 +20,8 @@ use gpui_kit::{
 };
 
 use selphy::config::{self, Config};
-use selphy::prepare;
-use selphy::report::error_chain;
+use selphy::prepare::{self, Job, Options};
+use selphy::report::{error_chain, sentence};
 
 use crate::appearance::{self, Appearance, ThemeChoice};
 use crate::batch::{Batch, Photo, Status};
@@ -52,7 +52,7 @@ impl BatchView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (theme, load_error) = match Appearance::load(&appearance::default_path()) {
             Ok(appearance) => (appearance.theme, None),
-            Err(err) => (ThemeChoice::default(), Some(sentence(error_chain(&err)))),
+            Err(err) => (ThemeChoice::default(), Some(error_sentence(&err))),
         };
         theme.apply(window, cx);
         if let Some(message) = load_error {
@@ -102,7 +102,7 @@ impl BatchView {
             let paths = match picked.await {
                 Ok(Ok(Some(paths))) => paths,
                 Ok(Err(err)) => {
-                    let message = sentence(error_chain(&err));
+                    let message = error_sentence(&err);
                     cx.update(|window, cx| {
                         show_error("Couldn't open the file picker", message, window, cx)
                     })
@@ -134,12 +134,7 @@ impl BatchView {
                 self.batch.add(files);
                 self.summary = None;
             }
-            Err(err) => show_error(
-                "Couldn't add photos",
-                sentence(error_chain(&err)),
-                window,
-                cx,
-            ),
+            Err(err) => show_error("Couldn't add photos", error_sentence(&err), window, cx),
         }
         cx.notify();
     }
@@ -162,7 +157,7 @@ impl BatchView {
                 }
             }
             Ok(Err(err)) => {
-                let message = sentence(error_chain(&err));
+                let message = error_sentence(&err);
                 cx.update(|window, cx| {
                     show_error("Couldn't open the folder picker", message, window, cx)
                 })
@@ -229,27 +224,14 @@ impl BatchView {
         if !self.is_ready() {
             return;
         }
-        let Some(out_dir) = self.out_dir.clone() else {
+        let Some(job) = self.job(window, cx) else {
             return;
         };
-        let cfg = match Config::load(&config::default_path()) {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                let message = format!("{} Fix it in Config.", sentence(error_chain(&err)));
-                show_error(
-                    "Couldn't read the printer config",
-                    message.into(),
-                    window,
-                    cx,
-                );
-                return;
-            }
-        };
-        let jobs = self.batch.start();
+        let queue = self.batch.start();
         self.summary = None;
         self.cancelling = false;
         self.run = Some(cx.spawn(async move |this, cx| {
-            for (id, source) in jobs {
+            for (id, source) in queue {
                 let go_on = this.update(cx, |this, cx| {
                     if this.cancelling {
                         return false;
@@ -263,10 +245,10 @@ impl BatchView {
                     Ok(false) => break,
                     Err(_) => return,
                 }
-                let (cfg, out_dir) = (cfg.clone(), out_dir.clone());
+                let job = job.clone();
                 let status = cx
                     .background_spawn(async move {
-                        let result = prepare::prepare_one(&source, &out_dir, &cfg, None);
+                        let result = job.run_one(&source);
                         Status::from_result(&result, &source)
                     })
                     .await;
@@ -279,6 +261,36 @@ impl BatchView {
             this.update(cx, |this, cx| this.finish(cx)).ok();
         }));
         cx.notify();
+    }
+
+    /// The job for a run into the chosen folder, with the config file read
+    /// afresh. Sources stay in place and no camera reference is used, as the
+    /// README says. Shows why and returns `None` when it cannot be built.
+    fn job(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Job> {
+        let out_dir = self.out_dir.clone()?;
+        let cfg = match Config::load(&config::default_path()) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                let message = format!("{} Fix it in Config.", error_sentence(&err));
+                show_error(
+                    "Couldn't read the printer config",
+                    message.into(),
+                    window,
+                    cx,
+                );
+                return None;
+            }
+        };
+        let opts = Options {
+            out_dir,
+            archive_dir: None,
+            camera_ref: None,
+        };
+        Job::new(cfg, opts)
+            .inspect_err(|err| {
+                show_error("Couldn't start preparing", error_sentence(err), window, cx)
+            })
+            .ok()
     }
 
     fn cancel_prepare(&mut self, _: &CancelPrepare, _: &mut Window, cx: &mut Context<Self>) {
@@ -605,6 +617,11 @@ fn show_error(title: &str, message: SharedString, window: &mut Window, cx: &mut 
     );
 }
 
+/// An error that is not about one photo, as a sentence for a notice.
+pub fn error_sentence(err: &anyhow::Error) -> SharedString {
+    sentence(&error_chain(err)).into()
+}
+
 /// The path with the home folder shown as `~`.
 fn display_path(path: &Path) -> String {
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -615,19 +632,6 @@ fn display_path(path: &Path) -> String {
         Some(rest) => Path::new("~").join(rest).display().to_string(),
         None => path.display().to_string(),
     }
-}
-
-/// An error chain as a sentence: first letter capitalized, final period.
-pub fn sentence(text: String) -> SharedString {
-    let mut text = text;
-    if let Some(first) = text.get(..1) {
-        let upper = first.to_uppercase();
-        text.replace_range(..1, &upper);
-    }
-    if !text.ends_with('.') {
-        text.push('.');
-    }
-    text.into()
 }
 
 #[cfg(test)]
@@ -653,13 +657,5 @@ mod tests {
     fn summary_text_says_when_the_run_was_cancelled() {
         assert_eq!(summary(0, 0, true), "Cancelled");
         assert_eq!(summary(2, 1, true), "Cancelled after 2 prepared, 1 failed");
-    }
-
-    #[test]
-    fn error_chain_becomes_a_sentence() {
-        assert_eq!(
-            sentence("listing trip: permission denied".into()).as_ref(),
-            "Listing trip: permission denied."
-        );
     }
 }

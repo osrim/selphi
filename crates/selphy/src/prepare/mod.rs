@@ -4,6 +4,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
@@ -15,7 +16,7 @@ use crate::imaging::{self, Source};
 mod archive;
 mod inputs;
 
-pub use archive::archive;
+use archive::archive;
 pub use inputs::collect_inputs;
 
 /// What preparing one photo produced.
@@ -31,7 +32,7 @@ pub struct Prepared {
 /// Exif is not carried over: it names the editing software, which some
 /// printers reject, and its resolution tags contradict the 300 dpi header.
 /// `camera_exif`, when given, is written instead.
-pub fn prepare_one(
+fn prepare_one(
     source: &Path,
     out_dir: &Path,
     cfg: &Config,
@@ -63,7 +64,7 @@ fn output_name(source: &Path) -> Result<OsString> {
     Ok(name)
 }
 
-/// Where a batch reads and writes.
+/// Where a job reads and writes.
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Where the print-ready JPEGs go.
@@ -72,15 +73,6 @@ pub struct Options {
     pub archive_dir: Option<PathBuf>,
     /// An unedited camera JPEG whose Exif is written into every output.
     pub camera_ref: Option<PathBuf>,
-}
-
-/// What happened to one input.
-#[derive(Debug)]
-pub struct Outcome {
-    /// The input as given.
-    pub source: PathBuf,
-    /// What was done, or why it failed.
-    pub result: Result<Done>,
 }
 
 /// A photo that was prepared, and archived when asked.
@@ -92,43 +84,62 @@ pub struct Done {
     pub archived: Option<PathBuf>,
 }
 
-/// Prepares every input, in order. A failed photo is reported in its
-/// `Outcome` and the batch goes on; it is not archived, so it stays where it
-/// was for inspection. `on_progress` is called after each photo.
+/// One configured prepare run. `new` checks what it can before the first
+/// photo; `run_one` then prepares one source per call, so that the caller
+/// decides the order, the progress display, and when to stop.
 ///
-/// Fails as a whole only if the camera reference cannot be read.
-pub fn prepare_batch(
-    inputs: &[PathBuf],
-    cfg: &Config,
-    opts: &Options,
-    mut on_progress: impl FnMut(&Outcome),
-) -> Result<Vec<Outcome>> {
-    let camera_exif = opts.camera_ref.as_deref().map(camera_exif).transpose()?;
-
-    let mut outcomes = Vec::with_capacity(inputs.len());
-    for source in inputs {
-        let outcome = Outcome {
-            source: source.clone(),
-            result: prepare_and_archive(source, cfg, opts, camera_exif.as_deref()),
-        };
-        on_progress(&outcome);
-        outcomes.push(outcome);
-    }
-    Ok(outcomes)
+/// A clone shares the camera Exif, so a clone is cheap to move to another
+/// thread.
+#[derive(Debug, Clone)]
+pub struct Job {
+    cfg: Config,
+    opts: Options,
+    camera_exif: Option<Arc<[u8]>>,
 }
 
-fn prepare_and_archive(
-    source: &Path,
-    cfg: &Config,
-    opts: &Options,
-    camera_exif: Option<&[u8]>,
-) -> Result<Done> {
-    let prepared = prepare_one(source, &opts.out_dir, cfg, camera_exif)?;
-    let archived = match &opts.archive_dir {
-        Some(dir) => Some(archive(source, dir)?),
-        None => None,
-    };
-    Ok(Done { prepared, archived })
+impl Job {
+    /// A job that prepares photos with `cfg` as `opts` says. Reads the camera
+    /// reference's Exif once, when one is given; an unreadable reference, or
+    /// one with no Exif, is an error, so that no photo gets the wrong Exif.
+    pub fn new(cfg: Config, opts: Options) -> Result<Self> {
+        let camera_exif = opts
+            .camera_ref
+            .as_deref()
+            .map(camera_exif)
+            .transpose()?
+            .map(Arc::from);
+        Ok(Self {
+            cfg,
+            opts,
+            camera_exif,
+        })
+    }
+
+    /// Where this job reads and writes.
+    pub fn options(&self) -> &Options {
+        &self.opts
+    }
+
+    /// Prepares `source` into the output folder, then archives it when the
+    /// job has an archive folder. A failed photo is not archived, so it stays
+    /// where it was for inspection.
+    pub fn run_one(&self, source: &Path) -> Result<Done> {
+        let prepared = prepare_one(
+            source,
+            &self.opts.out_dir,
+            &self.cfg,
+            self.camera_exif.as_deref(),
+        )?;
+        let archived = match &self.opts.archive_dir {
+            // Named, so that an archive failure does not read like a failed
+            // prepare once the source path is left out.
+            Some(dir) => Some(
+                archive(source, dir).with_context(|| format!("archiving to {}", dir.display()))?,
+            ),
+            None => None,
+        };
+        Ok(Done { prepared, archived })
+    }
 }
 
 /// The camera reference's Exif, with its orientation reset like any source's.
@@ -208,6 +219,10 @@ mod tests {
         }
     }
 
+    fn job(dir: &Path, archive: bool) -> Job {
+        Job::new(Config::default(), options(dir, archive)).unwrap()
+    }
+
     #[test]
     fn a_bad_photo_does_not_stop_the_batch() {
         let dir = fresh_dir("batch");
@@ -215,48 +230,52 @@ mod tests {
         let bad = dir.join("b.jpg");
         fs::write(&bad, b"not a jpeg").unwrap();
         let good_c = source_jpeg(&dir, "c.jpg", &exif_with_orientation(1));
-        let inputs = [good_a.clone(), bad.clone(), good_c.clone()];
 
-        let mut seen = Vec::new();
-        let outcomes = prepare_batch(&inputs, &Config::default(), &options(&dir, true), |o| {
-            seen.push(o.source.clone())
-        })
-        .unwrap();
+        let job = job(&dir, true);
+        let results: Vec<_> = [&good_a, &bad, &good_c]
+            .into_iter()
+            .map(|source| job.run_one(source))
+            .collect();
 
-        assert_eq!(
-            seen, inputs,
-            "progress is reported for every photo, in order"
-        );
-        let ok: Vec<bool> = outcomes.iter().map(|o| o.result.is_ok()).collect();
+        let ok: Vec<bool> = results.iter().map(Result::is_ok).collect();
         assert_eq!(ok, [true, false, true]);
         assert!(bad.exists(), "a failed photo stays in place");
         assert!(
             !good_a.exists() && !good_c.exists(),
             "finished photos are archived"
         );
-        let done = outcomes[0].result.as_ref().unwrap();
+        let done = results[0].as_ref().unwrap();
         assert_eq!(done.archived, Some(dir.join("originals/a.jpg")));
+    }
+
+    #[test]
+    fn an_archive_failure_says_it_was_the_archive() {
+        let dir = fresh_dir("batch-archive-bad");
+        let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
+        fs::write(dir.join("originals"), b"a file, not a folder").unwrap();
+
+        let err = job(&dir, true).run_one(&photo).unwrap_err();
+        assert!(err.to_string().starts_with("archiving to "), "{err:#}");
+        assert!(
+            photo.exists(),
+            "a source that was not archived stays in place"
+        );
     }
 
     #[test]
     fn without_an_archive_dir_sources_stay_put() {
         let dir = fresh_dir("batch-no-archive");
         let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
-        let outcomes = prepare_batch(
-            std::slice::from_ref(&photo),
-            &Config::default(),
-            &options(&dir, false),
-            |_| {},
-        )
-        .unwrap();
-        assert_eq!(outcomes[0].result.as_ref().unwrap().archived, None);
+        let done = job(&dir, false).run_one(&photo).unwrap();
+        assert_eq!(done.archived, None);
         assert!(photo.exists());
     }
 
     #[test]
     fn camera_reference_exif_goes_into_every_output() {
         let dir = fresh_dir("batch-camera");
-        let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
+        let a = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
+        let b = source_jpeg(&dir, "b.jpg", &exif_with_orientation(1));
         // A camera shot tagged "rotate 90": its orientation must be reset, or
         // the printer would turn every photo sideways.
         let camera = source_jpeg(&dir, "camera.jpg", &exif_with_orientation(6));
@@ -264,27 +283,42 @@ mod tests {
             camera_ref: Some(camera),
             ..options(&dir, false)
         };
-        let outcomes = prepare_batch(&[photo], &Config::default(), &opts, |_| {}).unwrap();
-        let output = &outcomes[0].result.as_ref().unwrap().prepared.output;
-        assert_eq!(exif_of(output), Some(exif_with_orientation(1)));
+        let job = Job::new(Config::default(), opts).unwrap();
+        for source in [a, b] {
+            let output = job.run_one(&source).unwrap().prepared.output;
+            assert_eq!(exif_of(&output), Some(exif_with_orientation(1)));
+        }
     }
 
     #[test]
-    fn an_unreadable_camera_reference_fails_the_whole_batch() {
+    fn an_unreadable_camera_reference_fails_the_job() {
         let dir = fresh_dir("batch-camera-bad");
-        let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
         let opts = Options {
             camera_ref: Some(dir.join("missing.jpg")),
             ..options(&dir, true)
         };
-        let err = prepare_batch(
-            std::slice::from_ref(&photo),
-            &Config::default(),
-            &opts,
-            |_| {},
-        )
-        .unwrap_err();
+        let err = Job::new(Config::default(), opts).unwrap_err();
         assert!(format!("{err:#}").contains("camera reference"), "{err:#}");
-        assert!(photo.exists(), "nothing was processed");
+    }
+
+    #[test]
+    fn a_clone_prepares_the_same_output() {
+        let dir = fresh_dir("batch-clone");
+        let a = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
+        let b = source_jpeg(&dir, "b.jpg", &exif_with_orientation(1));
+        let camera = source_jpeg(&dir, "camera.jpg", &exif_with_orientation(1));
+        let opts = Options {
+            camera_ref: Some(camera),
+            ..options(&dir, false)
+        };
+        let job = Job::new(Config::default(), opts).unwrap();
+        let clone = job.clone();
+
+        let from_job = job.run_one(&a).unwrap().prepared.output;
+        let from_clone = std::thread::spawn(move || clone.run_one(&b).unwrap().prepared.output)
+            .join()
+            .unwrap();
+        assert_eq!(from_clone.parent(), from_job.parent());
+        assert_eq!(fs::read(from_clone).unwrap(), fs::read(from_job).unwrap());
     }
 }

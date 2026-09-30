@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use selphy::prepare::Prepared;
-use selphy::report::{error_chain, white_summary};
+use selphy::prepare::Done;
+use selphy::report::{photo_error, placement_summary};
 
 /// Stable identity of a photo in the batch, for element ids and for results
 /// that arrive after the list changed.
@@ -28,35 +28,20 @@ pub enum Status {
 }
 
 impl Status {
-    /// The status for a finished `prepare_one` of `source`.
-    pub fn from_result(result: &anyhow::Result<Prepared>, source: &Path) -> Self {
+    /// The status for a finished `Job::run_one` of `source`: "Portrait,
+    /// stretched 1.9%, edge to edge", or why it failed, without the path
+    /// the row already shows.
+    pub fn from_result(result: &anyhow::Result<Done>, source: &Path) -> Self {
         match result {
-            Ok(prepared) => Self::Prepared(prepared_summary(prepared)),
-            Err(err) => Self::Failed(failure_reason(&error_chain(err), source)),
+            Ok(done) => {
+                let p = &done.prepared.placement;
+                let mut orientation = p.canvas.orientation.name().to_string();
+                orientation[..1].make_ascii_uppercase();
+                Self::Prepared(format!("{orientation}, {}", placement_summary(p)))
+            }
+            Err(err) => Self::Failed(photo_error(err, source)),
         }
     }
-}
-
-/// The error without its leading "reading <source>: ", which the row
-/// already shows as the photo's name.
-fn failure_reason(chain: &str, source: &Path) -> String {
-    let prefix = format!("{}: ", source.display());
-    match chain.split_once(&prefix) {
-        Some((_, reason)) if !reason.is_empty() => reason.to_string(),
-        _ => chain.to_string(),
-    }
-}
-
-/// "Portrait, stretched 1.9%, edge to edge".
-fn prepared_summary(prepared: &Prepared) -> String {
-    let p = &prepared.placement;
-    let mut orientation = p.canvas.orientation.name().to_string();
-    orientation[..1].make_ascii_uppercase();
-    format!(
-        "{orientation}, stretched {:.1}%, {}",
-        p.stretch_pct,
-        white_summary(p)
-    )
 }
 
 #[derive(Debug)]
@@ -192,9 +177,9 @@ mod tests {
     fn start_resets_results_and_counts_follow_status() {
         let mut batch = Batch::default();
         batch.add(paths(&["a.jpg", "b.jpg", "c.jpg"]));
-        let jobs = batch.start();
-        batch.set_status(jobs[0].0, Status::Prepared("ok".into()));
-        batch.set_status(jobs[1].0, Status::Failed("bad".into()));
+        let queue = batch.start();
+        batch.set_status(queue[0].0, Status::Prepared("ok".into()));
+        batch.set_status(queue[1].0, Status::Failed("bad".into()));
         assert_eq!(batch.counts(), (1, 1));
 
         batch.start();
@@ -211,36 +196,26 @@ mod tests {
     fn a_result_for_a_removed_photo_is_ignored() {
         let mut batch = Batch::default();
         batch.add(paths(&["a.jpg"]));
-        let jobs = batch.start();
+        let queue = batch.start();
         batch.clear();
-        batch.set_status(jobs[0].0, Status::Prepared("ok".into()));
+        batch.set_status(queue[0].0, Status::Prepared("ok".into()));
         assert!(batch.is_empty());
     }
 
     #[test]
-    fn failure_reason_drops_the_path_the_row_shows() {
-        let source = Path::new("/photos/notes.jpg");
-        assert_eq!(
-            failure_reason("reading /photos/notes.jpg: Format error: bad bytes", source),
-            "Format error: bad bytes"
-        );
-        assert_eq!(
-            failure_reason("the image is empty", source),
-            "the image is empty"
-        );
-    }
-
-    #[test]
-    fn prepared_summary_starts_with_the_orientation() {
+    fn a_prepared_row_starts_with_the_orientation() {
         let cfg = selphy::config::Config::default();
         let placement = selphy::geometry::place(&cfg, 1920, 1080).unwrap();
-        let prepared = Prepared {
-            output: PathBuf::from("out/a-selphy.jpg"),
-            placement,
+        let done = Done {
+            prepared: selphy::prepare::Prepared {
+                output: PathBuf::from("out/a-selphy.jpg"),
+                placement,
+            },
+            archived: None,
         };
         assert_eq!(
-            prepared_summary(&prepared),
-            "Landscape, stretched 2.5%, white top 7.2, bottom 7.2 mm"
+            Status::from_result(&Ok(done), Path::new("a.jpg")),
+            Status::Prepared("Landscape, stretched 2.5%, white top 7.2, bottom 7.2 mm".into())
         );
     }
 }

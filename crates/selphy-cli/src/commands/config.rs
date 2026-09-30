@@ -9,7 +9,7 @@ use clap::Args;
 use selphy::config::{self, Config};
 use selphy::geometry::{self, Edge, Orientation, Trim};
 
-use selphy::report::white_summary;
+use selphy::report::placement_summary;
 
 #[derive(Args)]
 pub struct ConfigArgs {
@@ -74,11 +74,7 @@ pub fn run(args: ConfigArgs) -> Result<ExitCode> {
     println!("\nHow a photo lands");
     for (shape, width, height) in SAMPLE_SHAPES {
         let placement = geometry::place(&cfg, width, height).expect("sample sizes are non-zero");
-        println!(
-            "  {shape:<6}stretched {:.1}%, {}",
-            placement.stretch_pct,
-            white_summary(&placement)
-        );
+        println!("  {shape:<6}{}", placement_summary(&placement));
     }
     Ok(ExitCode::SUCCESS)
 }

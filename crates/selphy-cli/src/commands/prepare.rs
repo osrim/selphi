@@ -9,9 +9,9 @@ use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use selphy::config::{self, Config};
-use selphy::prepare::{self, Done, Options};
+use selphy::prepare::{self, Done, Job, Options};
 
-use selphy::report::{error_chain, white_summary};
+use selphy::report::{photo_error, placement_summary};
 
 #[derive(Args)]
 pub struct PrepareArgs {
@@ -60,30 +60,38 @@ pub fn run(args: PrepareArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let opts = Options {
-        out_dir: args.out,
-        archive_dir,
-        camera_ref: args.camera_ref,
-    };
+    let job = Job::new(
+        cfg,
+        Options {
+            out_dir: args.out,
+            archive_dir,
+            camera_ref: args.camera_ref,
+        },
+    )?;
     let bar = ProgressBar::new(inputs.len() as u64);
     bar.set_style(ProgressStyle::with_template(
         "{bar:30} {pos}/{len}  {elapsed}",
     )?);
-    let outcomes = prepare::prepare_batch(&inputs, &cfg, &opts, |outcome| {
+    let mut failed = 0;
+    for source in &inputs {
+        let result = job.run_one(source);
         // Print inside suspend: a line printed while the bar is drawn would
         // break up the bar's line.
-        bar.suspend(|| match &outcome.result {
-            Ok(done) => println!("{}", done_line(&outcome.source, done)),
-            Err(err) => eprintln!("✗ {}  {}", outcome.source.display(), error_chain(err)),
+        bar.suspend(|| match &result {
+            Ok(done) => println!("{}", done_line(source, done)),
+            Err(err) => {
+                failed += 1;
+                eprintln!("✗ {}  {}", source.display(), photo_error(err, source));
+            }
         });
         bar.inc(1);
-    })?;
+    }
     bar.finish_and_clear();
 
-    let failed = outcomes.iter().filter(|o| o.result.is_err()).count();
+    let opts = job.options();
     let mut summary = format!(
         "\n{} prepared → {}",
-        outcomes.len() - failed,
+        inputs.len() - failed,
         opts.out_dir.display()
     );
     if let Some(dir) = &opts.archive_dir {
@@ -102,10 +110,9 @@ fn done_line(source: &Path, done: &Done) -> String {
     let name = source.display();
     let p = &done.prepared.placement;
     let mut line = format!(
-        "✓ {name}  {}, stretched {:.1}%, {}",
+        "✓ {name}  {}, {}",
         p.canvas.orientation.name(),
-        p.stretch_pct,
-        white_summary(p)
+        placement_summary(p)
     );
     if let Some(archived) = &done.archived
         && archived.file_name() != source.file_name()
