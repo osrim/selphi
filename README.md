@@ -64,8 +64,8 @@ orientation and the distance from each canvas edge to the picture.
 The output has no Exif unless `--camera-ref` is given. Hidden files, such as
 the `._name.jpg` files macOS writes on external drives, are skipped.
 
-A photo that fails is reported and left where it was; the other photos are
-still prepared. The output reports each photo:
+A photo that fails is reported on stderr and left where it was; the other
+photos are still prepared. The output reports each photo:
 
 ```
 ✓ src/a.jpg  portrait, stretched 1.9%, edge to edge

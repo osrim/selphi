@@ -1,6 +1,7 @@
 //! `selphy prepare`: runs the batch with a progress bar and reports each photo.
 
-use std::path::PathBuf;
+use std::fmt::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -8,7 +9,7 @@ use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use selphy::config::{self, Config};
-use selphy::prepare::{self, Options, Outcome};
+use selphy::prepare::{self, Done, Options};
 
 use super::report::{error_chain, white_summary};
 
@@ -35,6 +36,8 @@ pub struct PrepareArgs {
     camera_ref: Option<PathBuf>,
 }
 
+/// Prepares the photos, reporting each on stdout and each failure on stderr.
+/// Exits with failure when any photo failed.
 pub fn run(args: PrepareArgs) -> Result<ExitCode> {
     // With no paths, work the default folders: src/ -> out/, archived to
     // originals/. Named paths are only archived when asked.
@@ -67,8 +70,12 @@ pub fn run(args: PrepareArgs) -> Result<ExitCode> {
         "{bar:30} {pos}/{len}  {elapsed}",
     )?);
     let outcomes = prepare::prepare_batch(&inputs, &cfg, &opts, |outcome| {
-        // suspend, not println: println prints nothing when stdout is piped.
-        bar.suspend(|| println!("{}", outcome_line(outcome)));
+        // Print inside suspend: a line printed while the bar is drawn would
+        // break up the bar's line.
+        bar.suspend(|| match &outcome.result {
+            Ok(done) => println!("{}", done_line(&outcome.source, done)),
+            Err(err) => eprintln!("✗ {}  {}", outcome.source.display(), error_chain(err)),
+        });
         bar.inc(1);
     })?;
     bar.finish_and_clear();
@@ -80,23 +87,19 @@ pub fn run(args: PrepareArgs) -> Result<ExitCode> {
         opts.out_dir.display()
     );
     if let Some(dir) = &opts.archive_dir {
-        summary.push_str(&format!(", sources → {}", dir.display()));
+        write!(summary, ", sources → {}", dir.display())?;
     }
     println!("{summary}");
     if failed > 0 {
-        println!("{failed} failed and left in place");
+        eprintln!("{failed} failed and left in place");
         return Ok(ExitCode::FAILURE);
     }
     Ok(ExitCode::SUCCESS)
 }
 
-/// One line per photo: what was done, or why it failed.
-fn outcome_line(outcome: &Outcome) -> String {
-    let name = outcome.source.display();
-    let done = match &outcome.result {
-        Ok(done) => done,
-        Err(err) => return format!("✗ {name}  {}", error_chain(err)),
-    };
+/// The line for a prepared photo: its orientation, stretch, and white.
+fn done_line(source: &Path, done: &Done) -> String {
+    let name = source.display();
     let p = &done.prepared.placement;
     let mut line = format!(
         "✓ {name}  {}, stretched {:.1}%, {}",
@@ -105,9 +108,9 @@ fn outcome_line(outcome: &Outcome) -> String {
         white_summary(p)
     );
     if let Some(archived) = &done.archived
-        && archived.file_name() != outcome.source.file_name()
+        && archived.file_name() != source.file_name()
     {
-        line.push_str(&format!(" (archived as {})", archived.display()));
+        let _ = write!(line, " (archived as {})", archived.display());
     }
     line
 }
