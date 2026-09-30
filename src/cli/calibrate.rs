@@ -138,12 +138,12 @@ fn ask_readings(cfg: &Config, orientation: Orientation) -> Result<Vec<(Edge, f64
             .with_help_message(&help)
             .with_starting_cursor(nearest_candidate(current))
             .prompt();
+        let [.., largest] = CANDIDATES_MM;
         match answer(choice)? {
             Reading::Line(mm) => readings.push((edge, mm)),
             Reading::NoneVisible => println!(
-                "  The {} edge trims more than {} mm, beyond this sheet; its trim is kept.",
+                "  The {} edge trims more than {largest} mm, beyond this sheet; its trim is kept.",
                 edge.name(),
-                CANDIDATES_MM[CANDIDATES_MM.len() - 1]
             ),
             Reading::Skip => {}
         }

@@ -153,6 +153,15 @@ impl Canvas {
         }
     }
 
+    /// The canvas side a trim on `edge` eats into: the width for the left
+    /// and right edges, the height for the top and bottom.
+    pub fn side_across(&self, edge: Edge) -> i64 {
+        match edge {
+            Edge::Left | Edge::Right => self.width,
+            Edge::Top | Edge::Bottom => self.height,
+        }
+    }
+
     pub fn safe_width(&self) -> i64 {
         self.width - self.trim_left - self.trim_right
     }

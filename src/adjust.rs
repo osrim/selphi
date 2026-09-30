@@ -32,7 +32,7 @@ pub fn apply_measurements(
                 edge.name()
             );
         }
-        let limit_mm = px_to_mm(across(&canvas, edge)) / 2.0;
+        let limit_mm = px_to_mm(canvas.side_across(edge)) / 2.0;
         if trim_mm > limit_mm {
             bail!(
                 "the {} edge would get a trim of {trim_mm:.2} mm, over half the canvas \
@@ -43,14 +43,6 @@ pub fn apply_measurements(
         *Trim::at(record.orientation, edge).mm_mut(&mut updated) = trim_mm;
     }
     Ok(updated)
-}
-
-/// The canvas side a trim on `edge` eats into.
-fn across(canvas: &Canvas, edge: Edge) -> i64 {
-    match edge {
-        Edge::Left | Edge::Right => canvas.width,
-        Edge::Top | Edge::Bottom => canvas.height,
-    }
 }
 
 /// Keeps the TOML tidy: 2.7253 is saved as 2.73.

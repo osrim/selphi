@@ -47,6 +47,8 @@ pub fn run(args: AdjustArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+const NOT_A_NUMBER: &str = "type a number of mm, such as 1.5 or -0.5";
+
 fn ask_measurements() -> Result<Vec<(Edge, f64)>> {
     let help = "positive = white showed, negative = picture was cut, 0 = picture reached the edge";
     let mut measured = Vec::new();
@@ -55,12 +57,12 @@ fn ask_measurements() -> Result<Vec<(Edge, f64)>> {
         let mm = CustomType::<f64>::new(&message)
             .with_default(0.0)
             .with_help_message(help)
-            .with_error_message("type a number of mm, such as 1.5 or -0.5")
+            .with_error_message(NOT_A_NUMBER)
             .with_validator(|mm: &f64| {
                 Ok(if mm.is_finite() {
                     Validation::Valid
                 } else {
-                    Validation::Invalid("type a number of mm, such as 1.5 or -0.5".into())
+                    Validation::Invalid(NOT_A_NUMBER.into())
                 })
             })
             .prompt();

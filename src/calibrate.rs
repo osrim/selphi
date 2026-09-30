@@ -85,10 +85,18 @@ pub fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<R
         );
 
         // Each line's outer side is exactly d pixels from its edge.
-        fill(&mut img, x0, d, x1 - x0, LINE_PX, colour);
-        fill(&mut img, x0, h - d - LINE_PX, x1 - x0, LINE_PX, colour);
-        fill(&mut img, d, y0, LINE_PX, y1 - y0, colour);
-        fill(&mut img, w - d - LINE_PX, y0, LINE_PX, y1 - y0, colour);
+        draw_filled_rect_mut(&mut img, rect(x0, d, x1 - x0, LINE_PX), colour);
+        draw_filled_rect_mut(
+            &mut img,
+            rect(x0, h - d - LINE_PX, x1 - x0, LINE_PX),
+            colour,
+        );
+        draw_filled_rect_mut(&mut img, rect(d, y0, LINE_PX, y1 - y0), colour);
+        draw_filled_rect_mut(
+            &mut img,
+            rect(w - d - LINE_PX, y0, LINE_PX, y1 - y0),
+            colour,
+        );
 
         // Labels sit inward of their own line, so a label never outlives it.
         let label = format!("{mm:.1}");
@@ -141,9 +149,10 @@ fn px(value: i64) -> u32 {
     u32::try_from(value).expect("sheet coordinates are positive")
 }
 
-fn fill(img: &mut RgbImage, x: i64, y: i64, width: i64, height: i64, colour: Rgb<u8>) {
-    let rect = Rect::at(x as i32, y as i32).of_size(px(width), px(height));
-    draw_filled_rect_mut(img, rect, colour);
+/// The rectangle with its top-left corner at (x, y). `width` and `height`
+/// must be positive.
+fn rect(x: i64, y: i64, width: i64, height: i64) -> Rect {
+    Rect::at(x as i32, y as i32).of_size(px(width), px(height))
 }
 
 /// Label text with its baseline at `baseline`, starting at `x`.
