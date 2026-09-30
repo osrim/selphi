@@ -114,7 +114,7 @@ mod tests {
             crate::geometry::Fit::Contain,
         )
         .unwrap();
-        let sheet = crate::imaging::render(&RgbImage::new(1, 1), &p);
+        let sheet = crate::imaging::render(&RgbImage::new(1, 1), &p, Default::default());
         (encode_jpeg(&sheet, exif, &[]).unwrap(), p)
     }
 

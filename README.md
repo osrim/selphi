@@ -6,7 +6,7 @@ printer's edge trim never crops the picture.
 In Borderless mode the SELPHY enlarges the image and cuts 2–6 mm off each
 edge. `selphy` measures that loss once, then places every photo inside the
 part of the page that reaches the card. Nothing of the picture is lost; the
-leftover space is white. With the Fill card fit (`--fit cover`), the photo
+leftover space is white. With the cover fit (`--fit cover`), the photo
 covers the card edge to edge instead, and the parts that do not fit are cut.
 
 ## Install
@@ -53,7 +53,9 @@ selphy prepare --dry-run             # show the plan; write and move nothing
 | `--archive <DIR>` | Move each finished source here. Default: `originals` when reading `src`; no archiving when paths are named. |
 | `--no-archive` | Leave finished sources where they are. |
 | `--camera-ref <FILE>` | An unedited camera JPEG. Its Exif is written into every output, for printers that reject edited files. Also read from `$CAMERA_REF`. |
-| `--fit <contain\|cover>` | How a photo fills the card: `contain` (Whole photo) or `cover` (Fill card). Default: the config's `fit`, else `contain`. Also read from `$SELPHY_FIT`. |
+| `--fit <contain\|cover>` | How a photo fills the card: `contain` (the whole photo, stretched up to 2.5%) or `cover` (fills the card, cropped, never stretched). Default: the config's `fit`, else `contain`. Also read from `$SELPHY_FIT`. |
+| `--sharpening <off\|standard\|strong>` | How much each photo is sharpened after resizing. Default: the config's `sharpening`, else `standard`. |
+| `--background <white\|black>` | The colour around a `contain` photo. Default: the config's `background`, else `white`. |
 | `-j, --jobs <N>` | How many photos to prepare at once. Default: the number of cores, at most 4, because each one holds a decoded photo. |
 | `--dry-run` | Print each photo's output, placement and archive path. Nothing is written or moved. |
 
@@ -74,10 +76,11 @@ For each photo, `prepare`:
    not 2:3. A 2:3 photo needs 1.9% and fills the card edge to edge.
    With `--fit cover`, the photo instead covers that part plus 1 mm into the
    trim on each edge, so that a trim that is a little off shows picture and
-   not white. The side that overflows is squeezed by up to 2.5%, to cut as
-   little as possible. The photo is centred, so both ends of the long side
-   lose the same amount.
-4. Sharpens, and writes a 300 dpi baseline JPEG at the canvas size
+   not white. The photo keeps its shape: the side that overflows is cropped,
+   not squeezed. The photo is centred, so both ends of that side lose the
+   same amount.
+4. Sharpens (`--sharpening`), fills the rest of the canvas with the
+   background (`--background`), and writes a 300 dpi baseline sRGB JPEG at the canvas size
    (150x100 mm), with 4:2:0 chroma, to `out/<name>-selphy.jpg`. Only the last extension is replaced:
    `photo.v2.png` becomes `photo.v2-selphy.jpg`.
 5. Moves the source to the archive folder. An existing file is never
@@ -143,6 +146,8 @@ window:
 - Printer: the four trims, the canvas and the max stretch, as the config file
   that the command line reads holds them. Save Calibration Sheet… writes the
   sheet for these values.
+- Output: the sharpening and the background, saved in the same config file,
+  and the printer settings that the outputs need.
 - Appearance: the theme, System, Light or Dark. A choice shows at once.
 
 Save (Cmd-S) checks the values, writes the config file and `gui.toml`, and
@@ -165,9 +170,9 @@ and the theme back to System; nothing is written until Save.
 
 ### `selphy config`
 
-Shows the config file, the fit, the canvas, the trim on each edge in both
+Shows the config file, the fit, the output settings, the canvas, the trim on each edge in both
 orientations, and how common photo shapes land on the card with the fit.
-`selphy config --fit cover` shows how the shapes land with the Fill card fit. The values are the
+`selphy config --fit cover` shows how the shapes land with the cover fit. The values are the
 ones this run uses:
 when env vars override values, an `Env` line under the header lists them, and
 each overridden value is marked with `(from SELPHY_…)`. In the trim
@@ -176,7 +181,8 @@ table, the mark also names the column, as in `(portrait from SELPHY_…)`.
 ```
 $ selphy config
 Config  ~/.config/selphy/printer.toml  (not found: using defaults)
-Fit     contain (Whole photo)
+Fit     contain
+Output  sRGB, standard sharpening, white background
 Canvas  150 x 100 mm, stretch up to 2.5%
 
 Trim, mm    landscape  portrait
@@ -259,7 +265,7 @@ canvas side.
 The file must hold a placement record, which only `selphy prepare` writes.
 `adjust` refuses a file made by an older selphy, and a file whose canvas
 differs from the current canvas: prepare and print it again. It also
-refuses a Fill card print, because its margins do not show the trim: prepare
+refuses a cover print, because its margins do not show the trim: prepare
 the photo with `--fit contain` to measure it.
 
 | Option | Meaning |
@@ -285,6 +291,24 @@ selphy completions zsh > ~/.zfunc/_selphy
 
 For zsh, `~/.zfunc` must be in `fpath` before `compinit` runs.
 
+## Printer settings
+
+The SELPHY's own Print Settings menu (Setup → Print settings, see the
+[CP1500 manual](https://cam.start.canon/en/P001/manual/html/UG-06_Set-up_0020.html))
+also changes the print. For selphy's outputs:
+
+| Setting | Use | Why |
+|---|---|---|
+| Borders | Borderless | The trims are measured in Borderless mode. Bordered prints the whole canvas smaller. |
+| Page Layout | 1-up | Other layouts shrink the canvas. |
+| Image Optimize | Off | It is on by default and corrects brightness and contrast again. |
+| Date, File Number | Off | They print over the picture. |
+| Print Finish | Any | Glossy, Semi-gloss or Satin change only the surface. |
+
+The outputs are always sRGB. The SELPHY does no colour management, so a
+wider colour space would print dull. Brightness, Color Adjustment and Filter
+stay in the printer, and selphy does not repeat them.
+
 ## Output and exit codes
 
 stdout gets results and tables: the prepared photos, the summary, the
@@ -309,12 +333,14 @@ The config file is `~/.config/selphy/printer.toml`. `$XDG_CONFIG_HOME` moves
 it. `--config <FILE>` names the file directly, and so does `$SELPHY_CONFIG`;
 the flag wins over the env var.
 
-The file holds the default fit and the `[postcard]` table: the canvas, the
-four trims and the max stretch. Without a file, selphy uses the defaults
-below.
+The file holds the default fit, the output settings and the `[postcard]`
+table: the canvas, the four trims and the max stretch. Without a file,
+selphy uses the defaults below.
 
 ```toml
 fit = "contain"          # the default fit: contain or cover
+sharpening = "standard"  # off, standard or strong
+background = "white"     # around a contain photo: white or black
 
 [postcard]
 canvas_long_mm = 150.0   # the canvas sent to the printer, not 4x6 inch
@@ -327,7 +353,8 @@ max_stretch_pct = 2.5    # largest one-axis stretch
 ```
 
 The fit is resolved as `--fit`, then `$SELPHY_FIT`, then `fit` in the file,
-then contain. Keys left out of the `[postcard]` table take the defaults above.
+then contain. `sharpening` and `background` are resolved as their flag, then
+the file, then the default; they have no env var. Keys left out of the `[postcard]` table take the defaults above.
 Unknown keys and tables are an error. So is a file with the profile keys at the top
 level, as older versions wrote it: move them into a `[postcard]` table. So
 are values that leave nothing to print on: a canvas side of 0 or less, a

@@ -16,6 +16,7 @@ use indicatif::ProgressBar;
 
 use selphy::config::{ConfigFile, FIT_ENV};
 use selphy::geometry::{Fit, Placement};
+use selphy::imaging::{Background, Look, Sharpening};
 use selphy::prepare::{self, Done, Dry, Job, Options, Planned};
 use selphy::report::{photo_error, placement_summary};
 
@@ -50,6 +51,16 @@ pub struct PrepareArgs {
     /// How a photo fills the card [default: the config's `fit`, else contain]
     #[arg(long, env = FIT_ENV, value_enum)]
     fit: Option<Fit>,
+
+    /// How much each photo is sharpened after resizing [default: the
+    /// config's `sharpening`, else standard]
+    #[arg(long, value_enum)]
+    sharpening: Option<Sharpening>,
+
+    /// The colour around a contain photo [default: the config's
+    /// `background`, else white]
+    #[arg(long, value_enum)]
+    background: Option<Background>,
 
     /// How many photos to prepare at once [default: the number of cores, at
     /// most 4]
@@ -86,6 +97,11 @@ pub fn run(args: PrepareArgs, term: &mut Terminal, file: &ConfigFile) -> Result<
 
     let loaded = file.load(args.fit)?;
     let profile = loaded.profile()?;
+    let saved_look = loaded.saved.look();
+    let look = Look {
+        sharpening: args.sharpening.unwrap_or(saved_look.sharpening),
+        background: args.background.unwrap_or(saved_look.background),
+    };
     let inputs = prepare::collect_inputs(&paths)?;
     if inputs.is_empty() {
         writeln!(term.err, "No images in {}", display_list(&paths))?;
@@ -100,6 +116,7 @@ pub fn run(args: PrepareArgs, term: &mut Terminal, file: &ConfigFile) -> Result<
             archive_dir,
             camera_ref: args.camera_ref,
             fit: loaded.fit,
+            look,
         },
     )?;
     let jobs = args.jobs.map_or_else(default_jobs, NonZeroUsize::get);
@@ -271,6 +288,8 @@ mod tests {
             no_archive: false,
             camera_ref: None,
             fit: None,
+            sharpening: None,
+            background: None,
             jobs: None,
             dry_run: false,
         }
@@ -509,7 +528,7 @@ mod tests {
         assert_eq!(code, ExitCode::SUCCESS);
         let out = written.out();
         assert!(
-            out.contains("landscape, stretched 2.4%, cut left "),
+            out.contains("landscape, stretched 0.0%, cut left "),
             "{out}"
         );
         assert!(!out.contains("white"), "{out}");
@@ -526,5 +545,30 @@ mod tests {
         run(args(vec![photo], &dir), &mut term, &file).unwrap();
 
         assert!(written.out().contains("cut left "), "{}", written.out());
+    }
+
+    #[test]
+    fn the_background_flag_wins_over_the_config_file() {
+        let dir = fresh_dir("cli-prepare-background");
+        let photo = write_jpeg(&dir.join("wide.jpg"), 320, 180, &[]);
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        fs::write(file.path(), "background = \"black\"\n").unwrap();
+        let corner = |background| {
+            let (mut term, _) = Terminal::scripted([]);
+            let args = PrepareArgs {
+                background,
+                no_archive: true,
+                archive: None,
+                ..args(vec![photo.clone()], &dir)
+            };
+            run(args, &mut term, &file).unwrap();
+            let output = selphy::imaging::load(&dir.join("out/wide-selphy.jpg")).unwrap();
+            output.image.to_rgb8().get_pixel(0, 0).0
+        };
+        assert!(corner(None).iter().all(|&c| c < 10), "the file's black");
+        assert!(
+            corner(Some(Background::White)).iter().all(|&c| c > 245),
+            "the flag's white"
+        );
     }
 }

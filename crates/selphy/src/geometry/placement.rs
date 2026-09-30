@@ -19,11 +19,11 @@ const BLEED_MM: f64 = 1.0;
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
 pub enum Fit {
-    /// Whole photo: stretched on one axis by up to the max stretch, with
-    /// white where its shape differs from the card's.
+    /// The whole photo, stretched on one axis by up to the max stretch,
+    /// with background where its shape differs from the card's.
     Contain,
-    /// Fill card: covers the card edge to edge, and cuts off the parts of
-    /// the photo that do not fit.
+    /// The photo, unstretched, covers the card edge to edge, and the parts
+    /// that do not fit are cropped.
     Cover,
 }
 
@@ -43,8 +43,8 @@ impl Fit {
     /// The name the user sees in the window and in `selphy config`.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Contain => "Whole photo",
-            Self::Cover => "Fill card",
+            Self::Contain => "Contain",
+            Self::Cover => "Cover",
         }
     }
 }
@@ -125,10 +125,10 @@ fn bleed_px(canvas: &Canvas, edge: Edge) -> i64 {
 ///
 /// Contain scales the picture uniformly to fit inside the safe box, then
 /// stretches the axis that falls short by up to `max_stretch_pct`, because
-/// the card is not 2:3. Cover scales it to cover the safe box plus the bleed,
-/// then squeezes the axis that overflows by up to the same cap, to lose as
-/// little of the photo as possible. Either way the picture is centred on the
-/// safe box, not the canvas, since the trims are asymmetric.
+/// the card is not 2:3. Cover scales it uniformly to cover the safe box plus
+/// the bleed, with no stretch, and crops the axis that overflows equally on
+/// both ends. Either way the picture is centred on the safe box, not the
+/// canvas, since the trims are asymmetric.
 pub fn place(profile: &Profile, width: u32, height: u32, fit: Fit) -> Option<Placement> {
     if width == 0 || height == 0 {
         return None;
@@ -138,7 +138,7 @@ pub fn place(profile: &Profile, width: u32, height: u32, fit: Fit) -> Option<Pla
     let max_factor = 1.0 + profile.max_stretch_pct / 100.0;
     let (pw, ph) = match fit {
         Fit::Contain => contain_size(&canvas, photo, max_factor),
-        Fit::Cover => cover_size(&canvas, photo, max_factor),
+        Fit::Cover => cover_size(&canvas, photo),
     };
 
     let (w, h) = photo;
@@ -169,21 +169,15 @@ fn contain_size(canvas: &Canvas, (w, h): (f64, f64), max_factor: f64) -> (i64, i
     (fit_w.round() as i64, fit_h.round() as i64)
 }
 
-/// The cover size of a `(w, h)` photo: over the safe box plus the bleed. The
-/// picture is centred, so each axis bleeds by the larger bleed of its two
-/// edges on both of them.
-fn cover_size(canvas: &Canvas, (w, h): (f64, f64), max_factor: f64) -> (i64, i64) {
+/// The cover size of a `(w, h)` photo: scaled uniformly over the safe box
+/// plus the bleed. The picture is centred, so each axis bleeds by the larger
+/// bleed of its two edges on both of them.
+fn cover_size(canvas: &Canvas, (w, h): (f64, f64)) -> (i64, i64) {
     let bleed = |a, b| 2 * bleed_px(canvas, a).max(bleed_px(canvas, b));
     let need_w = (canvas.safe_width() + bleed(Edge::Left, Edge::Right)) as f64;
     let need_h = (canvas.safe_height() + bleed(Edge::Top, Edge::Bottom)) as f64;
     let scale = (need_w / w).max(need_h / h);
-    let (mut fit_w, mut fit_h) = (w * scale, h * scale);
-    if fit_w - need_w > fit_h - need_h {
-        fit_w = (fit_w / max_factor).max(need_w);
-    } else {
-        fit_h = (fit_h / max_factor).max(need_h);
-    }
-    (round_up(fit_w), round_up(fit_h))
+    (round_up(w * scale), round_up(h * scale))
 }
 
 /// Rounds up, so that a cover picture never falls a pixel short. The
@@ -288,7 +282,9 @@ mod tests {
                 );
                 assert_eq!(p.white_mm(edge), 0.0, "{w}x{h}: {edge:?}");
             }
-            assert!(p.stretch_pct <= profile.max_stretch_pct + 0.1, "{w}x{h}");
+            // Rounding each side up to whole pixels is the only change of
+            // aspect.
+            assert!(p.stretch_pct < 0.1, "{w}x{h}: {}", p.stretch_pct);
         }
     }
 
@@ -319,16 +315,22 @@ mod tests {
     }
 
     #[test]
-    fn a_two_by_three_photo_is_not_cut_by_contain_and_by_a_pixel_at_most_by_cover() {
+    fn a_two_by_three_photo_is_not_cut_by_contain_and_cut_top_and_bottom_by_cover() {
         let contain = place(&postcard(), 3616, 5424, Fit::Contain).unwrap();
         let cover = place(&postcard(), 3616, 5424, Fit::Cover).unwrap();
-        // Cover would need a 2.6% stretch to add the bleed without a cut; the
-        // cap is 2.5%, so one pixel goes past the bleed at the top and bottom.
         for edge in Edge::ALL {
             assert_eq!(contain.cut_mm(edge), 0.0, "{edge:?}");
-            assert!(cover.cut_mm(edge) <= px_to_mm(1), "{edge:?}");
         }
+        // 2:3 is taller than the portrait safe box, and cover does not
+        // squeeze it, so the top and bottom are cut, by the same amount.
         assert_eq!(cover.cut_mm(Edge::Left), 0.0);
+        assert_eq!(cover.cut_mm(Edge::Right), 0.0);
+        let (top, bottom) = (cover.cut_mm(Edge::Top), cover.cut_mm(Edge::Bottom));
+        assert!(top > 1.0, "{top}");
+        assert!(
+            (top - bottom).abs() <= px_to_mm(1) + 1e-9,
+            "{top} vs {bottom}"
+        );
     }
 
     #[test]
@@ -336,7 +338,10 @@ mod tests {
         let p = place(&postcard(), 1920, 1080, Fit::Cover).unwrap();
         let (left, right) = (p.cut_mm(Edge::Left), p.cut_mm(Edge::Right));
         assert!(left > 3.0, "{left}");
-        assert!((left - right).abs() <= px_to_mm(1), "{left} vs {right}");
+        assert!(
+            (left - right).abs() <= px_to_mm(1) + 1e-9,
+            "{left} vs {right}"
+        );
         assert_eq!(p.cut_mm(Edge::Top), 0.0);
         assert_eq!(p.cut_mm(Edge::Bottom), 0.0);
     }
@@ -353,7 +358,7 @@ mod tests {
             assert_eq!(toml::from_str::<Holder>(&text).unwrap().fit, fit);
             assert_eq!(fit.name().parse::<Fit>().unwrap(), fit);
         }
-        assert_eq!(Fit::ALL.map(Fit::label), ["Whole photo", "Fill card"]);
+        assert_eq!(Fit::ALL.map(Fit::label), ["Contain", "Cover"]);
         let err = "stretch".parse::<Fit>().unwrap_err();
         assert_eq!(
             err.to_string(),

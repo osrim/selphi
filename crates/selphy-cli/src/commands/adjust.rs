@@ -31,7 +31,7 @@ pub struct AdjustArgs {
 /// the corrected trims. The trims are computed from the record's margins, so starting from the file's values is
 /// right even when the photo was prepared with an env override.
 ///
-/// A file that cannot correct the profile, such as a Fill card print, is an
+/// A file that cannot correct the profile, such as a Cover print, is an
 /// error before the prompts. Measurements given as edge flags are not asked
 /// for, and `--yes` saves without asking.
 pub fn run(args: AdjustArgs, term: &mut Terminal, file: &ConfigFile) -> Result<ExitCode> {
@@ -107,6 +107,7 @@ mod tests {
             archive_dir: None,
             camera_ref: None,
             fit,
+            look: Default::default(),
         };
         let planned = selphy::prepare::plan(&[source], &opts.out_dir).unwrap();
         let done = Job::new(postcard(), opts)
@@ -281,7 +282,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "a Fill card print cannot be measured; prepare it with the Whole photo fit (--fit \
+            "a Cover print cannot be measured; prepare it with the Contain fit (--fit \
              contain)"
         );
         assert_eq!(written.out(), "");

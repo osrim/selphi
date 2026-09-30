@@ -13,7 +13,7 @@ use image::imageops::{self, FilterType};
 use crate::atomic;
 use crate::config::Profile;
 use crate::geometry::{self, Fit, Placement};
-use crate::imaging::{self, Source};
+use crate::imaging::{self, Look, Source};
 use crate::record::Record;
 
 mod archive;
@@ -42,6 +42,8 @@ pub struct Options {
     pub camera_ref: Option<PathBuf>,
     /// How each photo fills the safe box. The placement record says which.
     pub fit: Fit,
+    /// The sharpening and the background of each output.
+    pub look: Look,
 }
 
 /// A photo that was prepared, and archived when asked.
@@ -207,7 +209,7 @@ impl Job {
             .context("the image is empty")?;
         let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
         Ok(Rendered {
-            sheet: imaging::render(&photo, &placement),
+            sheet: imaging::render(&photo, &placement, self.opts.look),
             placement,
             photo,
             source_size,
@@ -323,6 +325,7 @@ mod tests {
             archive_dir: archive.then(|| dir.join("originals")),
             camera_ref: None,
             fit: Fit::Contain,
+            look: Look::default(),
         }
     }
 

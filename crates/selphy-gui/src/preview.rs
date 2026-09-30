@@ -257,7 +257,7 @@ pub struct CardLayout {
     pub canvas: Bounds<Pixels>,
     /// The card: the canvas's safe box.
     pub card: Bounds<Pixels>,
-    /// The whole picture. For Fill card it reaches past the card, and may
+    /// The whole picture. For cover it reaches past the card, and may
     /// reach past the canvas.
     pub picture: Bounds<Pixels>,
 }
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn a_fill_card_picture_is_shown_whole_and_its_overflow_is_cut() {
         let profile = selphy::paper::Paper::Postcard.default_profile();
-        let placement = place(&profile, 1600, 1600, Fit::Cover).unwrap();
+        let placement = place(&profile, 1920, 1080, Fit::Cover).unwrap();
         assert!(placement.x < 0, "the picture reaches past the canvas");
         let layout = card_layout(pane(), &placement);
 

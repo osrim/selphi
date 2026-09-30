@@ -1,5 +1,5 @@
 //! Pixel work: decoding a photo, converting it to sRGB, laying it out on the
-//! canvas, and encoding the JPEG the SELPHY prints.
+//! canvas with the output settings, and encoding the JPEG the SELPHY prints.
 
 use std::path::Path;
 
@@ -10,10 +10,12 @@ use image::{DynamicImage, GenericImageView as _, ImageDecoder, ImageReader, Rgb,
 use moxcms::{ColorProfile, DataColorSpace, Layout, TransformOptions};
 
 mod jpeg;
+mod look;
 mod render;
 
 pub(crate) use jpeg::segments;
 pub use jpeg::{AppSegment, encode_jpeg, encode_plain_jpeg};
+pub use look::{Background, Look, Sharpening};
 pub use render::render;
 
 /// A decoded photo, turned the right way up, with the metadata we carry over.

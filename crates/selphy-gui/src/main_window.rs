@@ -653,6 +653,7 @@ fn load_setup(prefs: &Prefs) -> PrinterSetup {
         archive_dir: None,
         camera_ref: None,
         fit: settings.fit,
+        look: loaded.saved.look(),
     };
     let setup = match loaded.profile().and_then(|profile| Job::new(profile, opts)) {
         Ok(job) => Setup::Ready(job),

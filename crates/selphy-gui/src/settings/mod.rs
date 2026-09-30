@@ -1,5 +1,6 @@
-//! The Settings window, opened with Settings… (Cmd-,): the printer profile
-//! and the theme. Save checks the values, writes `printer.toml` then
+//! The Settings window, opened with Settings… (Cmd-,): the printer profile,
+//! the output settings and the theme. Save checks the values, writes
+//! `printer.toml` then
 //! `gui.toml`, and closes the window. Cancel, Escape or closing the window
 //! keeps the files as they were and puts the previous theme back. There is
 //! one Settings window; opening it again brings it to the front. Closing it
@@ -24,8 +25,10 @@ use crate::state::{Prefs, ThemeChoice};
 use crate::text::{display_path, error_sentence};
 use crate::{CancelSettings, SaveSettings};
 
+pub mod output;
 pub mod printer;
 
+use output::OutputForm;
 use printer::PrinterForm;
 
 /// The open Settings window, if any.
@@ -37,6 +40,7 @@ impl Global for SettingsWindowHandle {}
 pub struct SettingsWindow {
     prefs: Entity<Prefs>,
     printer: Entity<PrinterForm>,
+    output: Entity<OutputForm>,
     /// The theme chosen here, shown at once.
     theme: ThemeChoice,
     /// The theme the windows had when Settings opened, or since the last
@@ -55,8 +59,11 @@ impl SettingsWindow {
             (prefs.config().clone(), prefs.settings().clone())
         };
         let printer = cx.new(|cx| PrinterForm::new(file, settings.out_dir, window, cx));
+        let look = printer.read(cx).saved().look();
+        let output = cx.new(|_| OutputForm::new(look));
         let subscriptions = vec![
             cx.observe(&printer, |_, _, cx| cx.notify()),
+            cx.observe(&output, |_, _, cx| cx.notify()),
             // However the window closes, an unsaved theme is taken back.
             cx.on_release(|this, cx| {
                 if this.theme != this.kept_theme {
@@ -69,6 +76,7 @@ impl SettingsWindow {
         Self {
             prefs,
             printer,
+            output,
             theme: settings.theme,
             kept_theme: settings.theme,
             error: None,
@@ -86,6 +94,8 @@ impl SettingsWindow {
     fn restore_defaults(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.printer
             .update(cx, |printer, cx| printer.restore_defaults(window, cx));
+        self.output
+            .update(cx, |output, cx| output.restore_defaults(cx));
         self.choose_theme(ThemeChoice::default(), cx);
     }
 
@@ -99,8 +109,9 @@ impl SettingsWindow {
         else {
             return;
         };
+        let look = self.output.read(cx).look();
         let file = self.prefs.read(cx).config().clone();
-        if let Err(err) = file.save(&saved.with_profile(profile)) {
+        if let Err(err) = file.save(&saved.with_profile(profile).with_look(look)) {
             let path = display_path(file.path());
             self.error = Some(format!("Couldn't save {path}. {}", error_sentence(&err)).into());
             return cx.notify();
@@ -206,6 +217,7 @@ impl Render for SettingsWindow {
                         .px_6()
                         .py_5()
                         .child(section("Printer", self.printer.clone()))
+                        .child(section("Output", self.output.clone()))
                         .child(section("Appearance", self.render_appearance(cx))),
                 ),
             )

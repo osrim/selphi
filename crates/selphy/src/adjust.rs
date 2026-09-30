@@ -191,7 +191,7 @@ mod tests {
         let err = check_record(&old_profile(), &cover).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "a Fill card print cannot be measured; prepare it with the Whole photo fit (--fit \
+            "a Cover print cannot be measured; prepare it with the Contain fit (--fit \
              contain)"
         );
         assert!(apply_measurements(&old_profile(), &cover, &[(Edge::Top, 1.0)]).is_err());

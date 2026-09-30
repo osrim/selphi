@@ -53,7 +53,12 @@ pub fn run(args: ConfigArgs, term: &mut Terminal, file: &ConfigFile) -> Result<E
         if exists {
             bail!("{path} already exists");
         }
-        file.save(&loaded.saved.with_profile(loaded.saved_profile()))?;
+        let saved = &loaded.saved;
+        file.save(
+            &saved
+                .with_look(saved.look())
+                .with_profile(loaded.saved_profile()),
+        )?;
         writeln!(term.out, "Wrote {path}")?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -62,8 +67,8 @@ pub fn run(args: ConfigArgs, term: &mut Terminal, file: &ConfigFile) -> Result<E
     Ok(ExitCode::SUCCESS)
 }
 
-/// The config header, the fit, the canvas, the trims and the
-/// sample shapes, from the values this run uses.
+/// The config header, the fit, the output settings, the canvas, the trims
+/// and the sample shapes, from the values this run uses.
 fn show(term: &mut Terminal, file: &ConfigFile, exists: bool, loaded: &Loaded) -> Result<()> {
     let profile = loaded.profile()?;
     let status = if exists {
@@ -80,7 +85,13 @@ fn show(term: &mut Terminal, file: &ConfigFile, exists: bool, loaded: &Loaded) -
             .collect();
         writeln!(term.out, "Env     {}", set.join(", "))?;
     }
-    writeln!(term.out, "Fit     {} ({})", loaded.fit, loaded.fit.label())?;
+    writeln!(term.out, "Fit     {}", loaded.fit)?;
+    let look = loaded.saved.look();
+    writeln!(
+        term.out,
+        "Output  sRGB, {} sharpening, {} background",
+        look.sharpening, look.background
+    )?;
     writeln!(
         term.out,
         "Canvas  {}{} x {}{} mm, stretch up to {}%{}\n",
@@ -163,7 +174,8 @@ mod tests {
         assert!(
             out.starts_with(&format!(
                 "Config  {}  (not found: using defaults)\n\
-                 Fit     contain (Whole photo)\nCanvas  150 x 100 mm, stretch up to 2.5%\n",
+                 Fit     contain\nOutput  sRGB, standard sharpening, white background\n\
+                 Canvas  150 x 100 mm, stretch up to 2.5%\n",
                 file.path().display()
             )),
             "{out}"
@@ -257,7 +269,7 @@ mod tests {
         };
         run(args, &mut term, &file).unwrap();
         let out = written.out();
-        assert!(out.contains("\nFit     cover (Fill card)\n"), "{out}");
+        assert!(out.contains("\nFit     cover\n"), "{out}");
         for shape in ["4:3", "16:9"] {
             let line = out
                 .lines()

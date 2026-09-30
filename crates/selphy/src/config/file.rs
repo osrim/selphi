@@ -20,7 +20,9 @@ use crate::toml_file;
 pub const FIT_ENV: &str = "SELPHY_FIT";
 
 const HEADER: &str = "\
-# selphy printer geometry: the default fit, and the [postcard] table.
+# selphy printer geometry: the default fit, the output settings
+# (sharpening = off | standard | strong, background = white | black),
+# and the [postcard] table.
 # selphy rewrites this file, so comments added by hand are not kept.
 # Trims are mm of canvas lost per edge, named for the landscape canvas:
 # long A = left, long B = right, short A = top, short B = bottom.
@@ -266,6 +268,7 @@ mod tests {
 
     use super::*;
     use crate::config::fields::{MAX_STRETCH, TRIM_LONG_A};
+    use crate::imaging::{Background, Look, Sharpening};
     use crate::test_util::{fresh_dir, postcard};
 
     fn temp_file(name: &str) -> ConfigFile {
@@ -286,6 +289,8 @@ mod tests {
         let file = temp_file("config-roundtrip");
         let config = Config {
             fit: Some(Fit::Cover),
+            sharpening: Some(Sharpening::Strong),
+            background: Some(Background::Black),
             postcard: Some(Profile {
                 trim_short_a_mm: 1.8,
                 ..postcard()
@@ -297,6 +302,8 @@ mod tests {
         let text = fs::read_to_string(file.path()).unwrap();
         assert!(text.starts_with("# selphy printer geometry"), "{text}");
         assert!(text.contains("fit = \"cover\"\n"), "{text}");
+        assert!(text.contains("sharpening = \"strong\"\n"), "{text}");
+        assert!(text.contains("background = \"black\"\n"), "{text}");
         assert!(text.contains("[postcard]\n"), "{text}");
     }
 
@@ -411,6 +418,31 @@ mod tests {
     }
 
     #[test]
+    fn missing_output_settings_are_the_defaults_and_with_look_sets_them() {
+        let file = temp_file("config-look");
+        fs::write(file.path(), "background = \"black\"\n").unwrap();
+        let saved = file.load(None).unwrap().saved;
+        let look = saved.look();
+        assert_eq!(look.sharpening, Sharpening::Standard);
+        assert_eq!(look.background, Background::Black);
+
+        let off = Look {
+            sharpening: Sharpening::Off,
+            ..look
+        };
+        assert_eq!(saved.with_look(off).look(), off);
+        assert_eq!(Config::default().look(), Look::default());
+    }
+
+    #[test]
+    fn an_unknown_output_setting_value_is_an_error() {
+        let file = temp_file("config-look-bad");
+        fs::write(file.path(), "sharpening = \"max\"\n").unwrap();
+        let err = format!("{:#}", file.load(None).unwrap_err());
+        assert!(err.contains("max"), "{err}");
+    }
+
+    #[test]
     fn unknown_keys_are_rejected() {
         let file = temp_file("config-typo");
         fs::write(file.path(), "fitt = \"cover\"\n").unwrap();
@@ -422,7 +454,7 @@ mod tests {
     fn with_profile_sets_the_table_and_keeps_the_fit() {
         let before = Config {
             fit: Some(Fit::Cover),
-            postcard: None,
+            ..Config::default()
         };
         let profile = Profile {
             trim_long_a_mm: 1.5,

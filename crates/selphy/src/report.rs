@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::geometry::{Edge, Placement};
 
 /// "stretched 2.5%, white top 7.2, bottom 7.2 mm" for contain, "stretched
-/// 2.5%, cut left 4.1, right 4.1 mm" for cover, or "stretched 1.9%, edge to
+/// 0.0%, cut left 4.1, right 4.1 mm" for cover, or "stretched 1.9%, edge to
 /// edge" when neither leaves 0.05 mm or more. It leaves out the orientation,
 /// so that callers can put their own label first.
 pub fn placement_summary(placement: &Placement) -> String {
@@ -126,14 +126,12 @@ mod tests {
         let wide = place(&profile, 1920, 1080, Fit::Cover).unwrap();
         assert_eq!(
             placement_summary(&wide),
-            "stretched 2.4%, cut left 13.3, right 13.3 mm"
+            "stretched 0.0%, cut left 15.3, right 15.4 mm"
         );
-        // The stretch cap leaves one pixel past the bleed: see
-        // `geometry::placement`'s tests.
         let tall = place(&profile, 3616, 5424, Fit::Cover).unwrap();
         assert_eq!(
             placement_summary(&tall),
-            "stretched 2.5%, cut top 0.1, bottom 0.1 mm"
+            "stretched 0.0%, cut top 1.9, bottom 1.9 mm"
         );
     }
 
@@ -149,6 +147,7 @@ mod tests {
                 archive_dir: None,
                 camera_ref: None,
                 fit: Fit::Contain,
+                look: Default::default(),
             },
         )
         .unwrap();

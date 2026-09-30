@@ -1,4 +1,5 @@
-//! The printer config: the default fit and the postcard [`Profile`].
+//! The printer config: the default fit, the output settings and the
+//! postcard [`Profile`].
 //! [`ConfigFile`] stores it as TOML at `~/.config/selphy/printer.toml`. A
 //! missing file means "use the defaults": the values measured on the first
 //! SELPHY CP1500 this ran on.
@@ -14,11 +15,14 @@ mod file;
 pub use file::{ConfigFile, FIT_ENV, Loaded, Override};
 
 use crate::geometry::{Edge, Fit, Orientation, Trim, mm_to_px};
+use crate::imaging::{Background, Look, Sharpening};
 use crate::paper::Paper;
 
-/// The config file: the default fit and the `[postcard]` table. Without a
-/// table, postcard uses [`Paper::default_profile`]. Keys missing from the
-/// table take their value from it. Unknown keys are an error.
+/// The config file: the default fit, the output settings and the
+/// `[postcard]` table. Without a table, postcard uses
+/// [`Paper::default_profile`]. Keys missing from the table take their value
+/// from it. A missing output setting is its default. Unknown keys are an
+/// error.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawConfig")]
 pub struct Config {
@@ -26,6 +30,12 @@ pub struct Config {
     /// `SELPHY_FIT`. `None` means contain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fit: Option<Fit>,
+    /// The sharpening. `None` means standard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sharpening: Option<Sharpening>,
+    /// The background around a contain picture. `None` means white.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<Background>,
     /// The `[postcard]` table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub postcard: Option<Profile>,
@@ -37,6 +47,23 @@ impl Config {
         self.postcard
             .clone()
             .unwrap_or_else(|| Paper::Postcard.default_profile())
+    }
+
+    /// The output settings, with the default for each one that is not set.
+    pub fn look(&self) -> Look {
+        Look {
+            sharpening: self.sharpening.unwrap_or_default(),
+            background: self.background.unwrap_or_default(),
+        }
+    }
+
+    /// This config with each output setting in `look` set.
+    pub fn with_look(&self, look: Look) -> Config {
+        Config {
+            sharpening: Some(look.sharpening),
+            background: Some(look.background),
+            ..self.clone()
+        }
     }
 
     /// This config with `profile` as the `[postcard]` table.
@@ -65,6 +92,8 @@ impl Config {
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     fit: Option<Fit>,
+    sharpening: Option<Sharpening>,
+    background: Option<Background>,
     postcard: Option<toml::Table>,
 }
 
@@ -79,6 +108,8 @@ impl TryFrom<RawConfig> for Config {
             .map_err(|err| format!("[{}] {err}", Paper::Postcard))?;
         Ok(Config {
             fit: raw.fit,
+            sharpening: raw.sharpening,
+            background: raw.background,
             postcard,
         })
     }
