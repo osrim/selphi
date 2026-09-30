@@ -2,6 +2,7 @@
 //! edge trim never crops the picture.
 
 pub mod adjust;
+mod atomic;
 pub mod calibrate;
 pub mod config;
 pub mod geometry;

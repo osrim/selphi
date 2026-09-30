@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::atomic;
 use crate::config::Config;
 use crate::geometry::{self, Placement};
 use crate::imaging::{self, Source};
@@ -86,7 +87,7 @@ pub fn prepare_one(
 
     let output = out_dir.join(output_name(source)?);
     fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
-    fs::write(&output, jpeg).with_context(|| format!("writing {}", output.display()))?;
+    atomic::write(&output, jpeg)?;
     Ok(Prepared { output, placement })
 }
 
@@ -184,8 +185,7 @@ pub fn archive(source: &Path, archive_dir: &Path) -> Result<PathBuf> {
         Ok(()) => {}
         // A rename cannot cross disks, e.g. src/ on an SD card.
         Err(e) if e.kind() == ErrorKind::CrossesDevices => {
-            fs::copy(source, &target)
-                .with_context(|| format!("copying to {}", target.display()))?;
+            atomic::copy(source, &target)?;
             fs::remove_file(source).with_context(|| format!("removing {}", source.display()))?;
         }
         Err(e) => {

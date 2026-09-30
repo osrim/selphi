@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::atomic;
+
 /// Trims are millimetres of canvas the printer loses on each edge in
 /// Borderless mode. They are named for the LANDSCAPE canvas: long A is the
 /// left end, long B the right end, short A the top edge, short B the bottom.
@@ -69,8 +71,7 @@ impl Config {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         let body = toml::to_string_pretty(self)?;
-        fs::write(path, format!("{HEADER}{body}"))
-            .with_context(|| format!("writing {}", path.display()))
+        atomic::write(path, format!("{HEADER}{body}"))
     }
 }
 

@@ -17,7 +17,7 @@ use imageproc::rect::Rect;
 
 use crate::config::Config;
 use crate::geometry::{Canvas, Edge, Orientation, PPI, Trim, mm_to_px};
-use crate::imaging;
+use crate::{atomic, imaging};
 
 /// The candidate trims, one keyline per edge each.
 pub const CANDIDATES_MM: [f64; 9] = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5];
@@ -45,7 +45,7 @@ pub fn write_sheet(
     path: &Path,
 ) -> Result<()> {
     let jpeg = imaging::encode_plain_jpeg(&sheet(cfg, orientation, font), SHEET_QUALITY)?;
-    fs::write(path, jpeg).with_context(|| format!("writing {}", path.display()))
+    atomic::write(path, jpeg)
 }
 
 pub fn load_font(path: &Path) -> Result<FontVec> {
