@@ -49,8 +49,9 @@ impl Orientation {
     }
 }
 
-/// An edge of the canvas, as the picture is seen the right way up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// An edge of the canvas, as the picture is seen the right way up. Edges
+/// sort clockwise from the left, as in [`Edge::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Edge {
     /// The left edge.
     Left,
@@ -91,6 +92,9 @@ pub enum Trim {
 }
 
 impl Trim {
+    /// All four trims, in the order of their fields in `Config`.
+    pub const ALL: [Trim; 4] = [Trim::LongA, Trim::LongB, Trim::ShortA, Trim::ShortB];
+
     /// The trim that lands on `edge` of a canvas in `orientation`. The printer
     /// rotates a portrait picture so that its top lands on long A and its left
     /// on short B, as measured on a portrait print.
@@ -109,6 +113,15 @@ impl Trim {
         }
     }
 
+    /// The edge this trim lands on for `orientation`: the inverse of
+    /// [`Trim::at`].
+    pub fn edge(self, orientation: Orientation) -> Edge {
+        Edge::ALL
+            .into_iter()
+            .find(|&edge| Self::at(orientation, edge) == self)
+            .expect("Trim::at puts every trim on one edge")
+    }
+
     /// This trim's value in `cfg`.
     pub fn mm(self, cfg: &Config) -> f64 {
         match self {
@@ -116,6 +129,16 @@ impl Trim {
             Self::LongB => cfg.trim_long_b_mm,
             Self::ShortA => cfg.trim_short_a_mm,
             Self::ShortB => cfg.trim_short_b_mm,
+        }
+    }
+
+    /// The TOML key of this trim's field.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::LongA => "trim_long_a_mm",
+            Self::LongB => "trim_long_b_mm",
+            Self::ShortA => "trim_short_a_mm",
+            Self::ShortB => "trim_short_b_mm",
         }
     }
 
@@ -180,7 +203,7 @@ impl Canvas {
 
     /// The canvas side a trim on `edge` eats into: the width for the left
     /// and right edges, the height for the top and bottom.
-    pub fn side_across(&self, edge: Edge) -> i64 {
+    pub(crate) fn side_across(&self, edge: Edge) -> i64 {
         match edge {
             Edge::Left | Edge::Right => self.width,
             Edge::Top | Edge::Bottom => self.height,
@@ -220,12 +243,13 @@ mod tests {
     #[test]
     fn each_orientation_uses_all_four_trims_once() {
         for orientation in [Orientation::Landscape, Orientation::Portrait] {
-            for trim in [Trim::LongA, Trim::LongB, Trim::ShortA, Trim::ShortB] {
+            for trim in Trim::ALL {
                 let edges = Edge::ALL
                     .into_iter()
                     .filter(|&edge| Trim::at(orientation, edge) == trim)
                     .count();
                 assert_eq!(edges, 1, "{orientation:?}: {trim:?} is on {edges} edges");
+                assert_eq!(Trim::at(orientation, trim.edge(orientation)), trim);
             }
         }
     }
@@ -233,10 +257,7 @@ mod tests {
     #[test]
     fn mm_mut_writes_the_field_mm_reads() {
         let mut cfg = Config::default();
-        for (i, trim) in [Trim::LongA, Trim::LongB, Trim::ShortA, Trim::ShortB]
-            .into_iter()
-            .enumerate()
-        {
+        for (i, trim) in Trim::ALL.into_iter().enumerate() {
             *trim.mm_mut(&mut cfg) = 10.0 + i as f64;
             assert_eq!(trim.mm(&cfg), 10.0 + i as f64, "{trim:?}");
         }

@@ -5,7 +5,7 @@
 use anyhow::{Result, bail};
 
 use crate::config::Config;
-use crate::geometry::{Canvas, Edge, Trim, px_to_mm};
+use crate::geometry::{Canvas, Edge, px_to_mm};
 use crate::record::Record;
 
 /// The config after measuring a print of the file that `record` came from.
@@ -15,13 +15,17 @@ use crate::record::Record;
 ///
 /// The margin is canvas edge to picture edge, so the rule holds on edges
 /// with deliberate white too: trim = margin - white showing.
+///
+/// A measurement that gives a negative trim, or a trim over half the
+/// canvas, is an error: it is a wrong reading. A result that leaves nothing
+/// to print is an error from [`Config::with_trims`].
 pub fn apply_measurements(
     cfg: &Config,
     record: &Record,
     measured: &[(Edge, f64)],
 ) -> Result<Config> {
     let canvas = Canvas::new(cfg, record.orientation);
-    let mut updated = cfg.clone();
+    let mut trims = Vec::with_capacity(measured.len());
     for &(edge, white_mm) in measured {
         let margin_mm = px_to_mm(record.margin_px(edge));
         let trim_mm = round_to_hundredths(margin_mm - white_mm);
@@ -40,9 +44,9 @@ pub fn apply_measurements(
                 edge.name()
             );
         }
-        *Trim::at(record.orientation, edge).mm_mut(&mut updated) = trim_mm;
+        trims.push((edge, trim_mm));
     }
-    Ok(updated)
+    cfg.with_trims(record.orientation, &trims)
 }
 
 /// Keeps the TOML tidy: 2.7253 is saved as 2.73.
@@ -133,6 +137,19 @@ mod tests {
         // The same cut fits on the taller side.
         assert!(
             apply_measurements(&old_config(), &portrait_record(), &[(Edge::Top, -50.0)]).is_ok()
+        );
+    }
+
+    #[test]
+    fn trims_that_leave_nothing_are_an_error_naming_both_edges() {
+        // Portrait canvas: 150mm high. 75mm trims are each within half of it,
+        // but together they leave 0 px.
+        let measured = [(Edge::Top, -69.5), (Edge::Bottom, -69.5)];
+        let err = apply_measurements(&old_config(), &portrait_record(), &measured).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("the top and bottom trims (150 mm) leave nothing of the 150 mm side"),
+            "{message}"
         );
     }
 }

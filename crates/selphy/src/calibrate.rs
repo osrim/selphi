@@ -16,7 +16,7 @@ use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, text_size};
 use imageproc::rect::Rect;
 
 use crate::config::Config;
-use crate::geometry::{Canvas, Edge, Orientation, PPI, Trim, mm_to_px};
+use crate::geometry::{Canvas, Orientation, PPI, mm_to_px};
 use crate::{atomic, imaging};
 
 /// The candidate trims, one keyline per edge each.
@@ -58,7 +58,7 @@ pub fn load_font(path: &Path) -> Result<FontVec> {
 
 /// Draws the bracket sheet for `orientation`, at the configured canvas size.
 /// Fails if the canvas is too small to hold a slot per candidate.
-pub fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<RgbImage> {
+fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<RgbImage> {
     let canvas = Canvas::new(cfg, orientation);
     let (w, h) = (canvas.width, canvas.height);
 
@@ -123,19 +123,6 @@ pub fn sheet(cfg: &Config, orientation: Orientation, font: &FontVec) -> Result<R
         centred(&mut img, font, note, w / 2, h / 2 - 60 + 50 * i as i64);
     }
     Ok(img)
-}
-
-/// The config after reading a printed sheet: for each edge, the smallest
-/// number whose line still shows. That number is the top of the bracket the
-/// trim lies in, so a picture fitted with it is never cropped. Edges not in
-/// `readings` keep their trim. The sheet's orientation decides which trim
-/// each edge measures.
-pub fn apply_readings(cfg: &Config, orientation: Orientation, readings: &[(Edge, f64)]) -> Config {
-    let mut updated = cfg.clone();
-    for &(edge, smallest_visible_mm) in readings {
-        *Trim::at(orientation, edge).mm_mut(&mut updated) = smallest_visible_mm;
-    }
-    updated
 }
 
 /// Start and step of nine equal slots across the middle 76% of `span`.
@@ -259,38 +246,6 @@ mod tests {
         };
         let err = sheet(&cfg, Orientation::Landscape, &arial()).unwrap_err();
         assert!(format!("{err:#}").contains("too small"), "{err:#}");
-    }
-
-    #[test]
-    fn readings_on_a_portrait_sheet_land_on_the_mapped_trims() {
-        let before = Config::default();
-        let readings = [
-            (Edge::Top, 4.0),
-            (Edge::Bottom, 5.0),
-            (Edge::Left, 3.0),
-            (Edge::Right, 2.0),
-        ];
-        let after = apply_readings(&before, Orientation::Portrait, &readings);
-        // portrait top = long A, bottom = long B, left = short B, right = short A
-        assert_eq!(after.trim_long_a_mm, 4.0);
-        assert_eq!(after.trim_long_b_mm, 5.0);
-        assert_eq!(after.trim_short_b_mm, 3.0);
-        assert_eq!(after.trim_short_a_mm, 2.0);
-        assert_eq!(after.canvas_long_mm, before.canvas_long_mm);
-    }
-
-    #[test]
-    fn unread_edges_keep_their_trim() {
-        let before = Config::default();
-        let after = apply_readings(&before, Orientation::Landscape, &[(Edge::Left, 3.5)]);
-        assert_eq!(after.trim_long_a_mm, 3.5);
-        assert_eq!(
-            Config {
-                trim_long_a_mm: before.trim_long_a_mm,
-                ..after
-            },
-            before
-        );
     }
 
     #[test]

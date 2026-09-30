@@ -2,15 +2,16 @@
 //! `~/.config/selphy/printer.toml`. A missing file means "use the defaults",
 //! which are the values measured on the first SELPHY CP1500 this ran on.
 
+use std::fmt;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::atomic;
-use crate::geometry::mm_to_px;
+use crate::geometry::{Edge, Orientation, Trim, mm_to_px};
 
 /// Trims are millimetres of canvas the printer loses on each edge in
 /// Borderless mode. They are named for the LANDSCAPE canvas: long A is the
@@ -88,56 +89,191 @@ impl Config {
         atomic::write(path, format!("{HEADER}{body}"))
     }
 
+    /// This config with the trim on each edge in `trims` set, mapped
+    /// through [`Trim::at`] for `orientation`. Edges not in `trims` keep
+    /// their trim. The result is validated, and a trim error names the edges
+    /// of `orientation`, not the TOML keys.
+    pub fn with_trims(&self, orientation: Orientation, trims: &[(Edge, f64)]) -> Result<Config> {
+        let mut updated = self.clone();
+        for &(edge, mm) in trims {
+            *Trim::at(orientation, edge).mm_mut(&mut updated) = mm;
+        }
+        updated
+            .validate()
+            .map_err(|invalid| anyhow!(invalid.for_edges(orientation)))?;
+        Ok(updated)
+    }
+
     /// Checks that the values describe a printable canvas: the canvas sides
     /// are more than 0, the trims and the stretch are 0 or more, and on each
     /// side the two trims leave at least one pixel.
-    pub fn validate(&self) -> Result<()> {
-        let positive = [
-            ("canvas_long_mm", self.canvas_long_mm),
-            ("canvas_short_mm", self.canvas_short_mm),
-        ];
-        for (key, value) in positive {
-            ensure!(
-                value.is_finite() && value > 0.0,
-                "{key} = {value}: must be more than 0"
-            );
+    pub fn validate(&self) -> Result<(), Invalid> {
+        for side in Side::ALL {
+            let value = side.canvas_mm(self);
+            if !(value.is_finite() && value > 0.0) {
+                return Err(Invalid::Canvas { side, value });
+            }
         }
-        let non_negative = [
-            ("trim_long_a_mm", self.trim_long_a_mm),
-            ("trim_long_b_mm", self.trim_long_b_mm),
-            ("trim_short_a_mm", self.trim_short_a_mm),
-            ("trim_short_b_mm", self.trim_short_b_mm),
-            ("max_stretch_pct", self.max_stretch_pct),
-        ];
-        for (key, value) in non_negative {
-            ensure!(
-                value.is_finite() && value >= 0.0,
-                "{key} = {value}: must be 0 or more"
-            );
+        for trim in Trim::ALL {
+            let value = trim.mm(self);
+            if !non_negative(value) {
+                return Err(Invalid::NegativeTrim { trim, value });
+            }
         }
-        let sides = [
-            (
-                "long",
-                self.canvas_long_mm,
-                self.trim_long_a_mm,
-                self.trim_long_b_mm,
-            ),
-            (
-                "short",
-                self.canvas_short_mm,
-                self.trim_short_a_mm,
-                self.trim_short_b_mm,
-            ),
-        ];
-        for (side, canvas, a, b) in sides {
-            ensure!(
-                mm_to_px(canvas) - mm_to_px(a) - mm_to_px(b) >= 1,
-                "trim_{side}_a_mm + trim_{side}_b_mm = {} mm leaves nothing of the \
-                 {canvas} mm canvas_{side}_mm",
-                a + b
-            );
+        let value = self.max_stretch_pct;
+        if !non_negative(value) {
+            return Err(Invalid::Stretch { value });
+        }
+        for side in Side::ALL {
+            let side_mm = side.canvas_mm(self);
+            let [a, b] = side.trims().map(|trim| trim.mm(self));
+            if mm_to_px(side_mm) - mm_to_px(a) - mm_to_px(b) < 1 {
+                return Err(Invalid::NothingLeft {
+                    side,
+                    side_mm,
+                    sum_mm: a + b,
+                });
+            }
         }
         Ok(())
+    }
+}
+
+/// A finite number that is 0 or more.
+fn non_negative(value: f64) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
+/// The check that [`Config::validate`] failed, and the fields it failed on.
+/// `Display` names the TOML keys, so that the user can fix the file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Invalid {
+    /// A canvas side is not more than 0.
+    Canvas {
+        /// The canvas side.
+        side: Side,
+        /// Its value, in mm.
+        value: f64,
+    },
+    /// A trim is less than 0, or not a number.
+    NegativeTrim {
+        /// The trim.
+        trim: Trim,
+        /// Its value, in mm.
+        value: f64,
+    },
+    /// The max stretch is less than 0, or not a number.
+    Stretch {
+        /// Its value, in percent.
+        value: f64,
+    },
+    /// The two trims on one canvas side leave no pixel of it.
+    NothingLeft {
+        /// The canvas side.
+        side: Side,
+        /// The length of the side, in mm.
+        side_mm: f64,
+        /// The two trims added, in mm.
+        sum_mm: f64,
+    },
+}
+
+impl Invalid {
+    /// The message with the trims named by their edges on an `orientation`
+    /// canvas. The canvas and stretch messages keep their TOML keys.
+    fn for_edges(&self, orientation: Orientation) -> String {
+        match *self {
+            Self::NegativeTrim { trim, value } => {
+                format!(
+                    "the {} trim is {value} mm: it must be 0 or more",
+                    trim.edge(orientation).name()
+                )
+            }
+            Self::NothingLeft {
+                side,
+                side_mm,
+                sum_mm,
+            } => {
+                // In the order of Edge::ALL, so a side reads "left and right".
+                let mut edges = side.trims().map(|trim| trim.edge(orientation));
+                edges.sort();
+                format!(
+                    "the {} and {} trims ({sum_mm} mm) leave nothing of the {side_mm} mm side",
+                    edges[0].name(),
+                    edges[1].name()
+                )
+            }
+            Self::Canvas { .. } | Self::Stretch { .. } => self.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for Invalid {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Canvas { side, value } => {
+                write!(
+                    f,
+                    "canvas_{}_mm = {value}: must be more than 0",
+                    side.name()
+                )
+            }
+            Self::NegativeTrim { trim, value } => {
+                write!(f, "{} = {value}: must be 0 or more", trim.key())
+            }
+            Self::Stretch { value } => write!(f, "max_stretch_pct = {value}: must be 0 or more"),
+            Self::NothingLeft {
+                side,
+                side_mm,
+                sum_mm,
+            } => {
+                let side = side.name();
+                write!(
+                    f,
+                    "trim_{side}_a_mm + trim_{side}_b_mm = {sum_mm} mm leaves nothing of the \
+                     {side_mm} mm canvas_{side}_mm"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for Invalid {}
+
+/// A side of the canvas, named for the landscape canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The long side, which the long trims eat into.
+    Long,
+    /// The short side, which the short trims eat into.
+    Short,
+}
+
+impl Side {
+    const ALL: [Side; 2] = [Side::Long, Side::Short];
+
+    /// The lowercase name, as the TOML keys spell it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Long => "long",
+            Self::Short => "short",
+        }
+    }
+
+    /// The length of this side in `cfg`, in mm.
+    fn canvas_mm(self, cfg: &Config) -> f64 {
+        match self {
+            Self::Long => cfg.canvas_long_mm,
+            Self::Short => cfg.canvas_short_mm,
+        }
+    }
+
+    /// The A and B trims on this side.
+    fn trims(self) -> [Trim; 2] {
+        match self {
+            Self::Long => [Trim::LongA, Trim::LongB],
+            Self::Short => [Trim::ShortA, Trim::ShortB],
+        }
     }
 }
 
@@ -231,6 +367,72 @@ mod tests {
         };
         assert!(cfg.save(&path).is_err());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn with_trims_sets_the_trims_on_the_named_edges() {
+        let before = Config::default();
+        let trims = [
+            (Edge::Left, 3.0),
+            (Edge::Top, 4.0),
+            (Edge::Right, 2.0),
+            (Edge::Bottom, 5.0),
+        ];
+        for orientation in Orientation::ALL {
+            let after = before.with_trims(orientation, &trims).unwrap();
+            for (edge, mm) in trims {
+                assert_eq!(
+                    Trim::at(orientation, edge).mm(&after),
+                    mm,
+                    "{orientation:?} {edge:?}"
+                );
+            }
+            assert_eq!(after.canvas_long_mm, before.canvas_long_mm);
+            assert_eq!(after.max_stretch_pct, before.max_stretch_pct);
+        }
+    }
+
+    #[test]
+    fn with_trims_keeps_the_other_edges_and_leaves_self_alone() {
+        let before = Config::default();
+        let after = before
+            .with_trims(Orientation::Portrait, &[(Edge::Top, 3.5)])
+            .unwrap();
+        assert_eq!(before, Config::default());
+        // portrait top = long A
+        assert_eq!(after.trim_long_a_mm, 3.5);
+        assert_eq!(
+            Config {
+                trim_long_a_mm: before.trim_long_a_mm,
+                ..after
+            },
+            before
+        );
+    }
+
+    #[test]
+    fn with_trims_rejects_a_negative_trim_by_its_edge() {
+        let err = Config::default()
+            .with_trims(Orientation::Landscape, &[(Edge::Bottom, -0.5)])
+            .unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "the bottom trim is -0.5 mm: it must be 0 or more"
+        );
+    }
+
+    #[test]
+    fn with_trims_rejects_trims_that_leave_nothing_by_their_edges() {
+        let err = Config::default()
+            .with_trims(
+                Orientation::Portrait,
+                &[(Edge::Left, 50.0), (Edge::Right, 50.0)],
+            )
+            .unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "the left and right trims (100 mm) leave nothing of the 100 mm side"
+        );
     }
 
     #[test]

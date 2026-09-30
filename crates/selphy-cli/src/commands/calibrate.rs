@@ -95,7 +95,7 @@ pub fn run(args: CalibrateArgs) -> Result<ExitCode> {
         println!("No readings; nothing changed.");
         return Ok(ExitCode::SUCCESS);
     }
-    let updated = calibrate::apply_readings(&cfg, orientation, &readings);
+    let updated = cfg.with_trims(orientation, &readings)?;
     print_changes(&cfg, &updated, orientation);
 
     confirm_save(&updated, &path)?;
@@ -119,6 +119,10 @@ impl fmt::Display for Reading {
     }
 }
 
+/// Asks, for each edge of a printed sheet, for the smallest number whose
+/// line still shows. That number is the top of the bracket the trim lies
+/// in, so a picture fitted with it is never cropped. The sheet's
+/// orientation decides which trim each edge measures.
 fn ask_readings(cfg: &Config, orientation: Orientation) -> Result<Vec<(Edge, f64)>> {
     let help = format!(
         "hold the card {} as printed; the cursor starts at the current trim",
