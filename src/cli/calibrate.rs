@@ -31,7 +31,7 @@ pub struct CalibrateArgs {
     read: bool,
 
     /// Where to write the sheet [default: calibration-<orientation>.jpg]
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "read")]
     out: Option<PathBuf>,
 
     /// The TrueType font for the labels.
