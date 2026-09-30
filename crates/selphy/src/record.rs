@@ -13,10 +13,11 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 
-use crate::geometry::{Edge, Orientation, Placement};
+use crate::geometry::{Edge, Orientation, Placement, px_to_mm};
+use crate::imaging::{self, AppSegment};
 
 /// The APP segment number. APP15 is not used by any common format.
-pub const SEGMENT: u8 = 15;
+const SEGMENT: u8 = 15;
 const MARKER: u8 = 0xE0 + SEGMENT;
 const SIGNATURE: &[u8] = b"selphy\0";
 
@@ -44,9 +45,19 @@ impl Record {
         self.margins[edge as usize]
     }
 
-    /// The segment payload, signature included.
-    pub fn to_segment(&self) -> Vec<u8> {
-        [SIGNATURE, self.to_string().as_bytes()].concat()
+    /// The trim on `edge` when the card shows `white_mm` of white there:
+    /// margin - white, not rounded. [`Placement::white_mm`] is the forward
+    /// rule, white = margin - trim.
+    pub fn trim_mm(&self, edge: Edge, white_mm: f64) -> f64 {
+        px_to_mm(self.margin_px(edge)) - white_mm
+    }
+
+    /// The JPEG segment that holds this record.
+    pub fn segment(&self) -> AppSegment {
+        AppSegment {
+            number: SEGMENT,
+            payload: [SIGNATURE, self.to_string().as_bytes()].concat(),
+        }
     }
 
     /// Reads the record from a JPEG file written by `prepare`.
@@ -57,7 +68,7 @@ impl Record {
 
     /// Finds and parses the record in JPEG bytes.
     pub fn find(jpeg: &[u8]) -> Result<Self> {
-        let payload = segments(jpeg)
+        let payload = imaging::segments(jpeg)
             .into_iter()
             .find_map(|(marker, data)| {
                 (marker == MARKER)
@@ -121,37 +132,11 @@ impl FromStr for Record {
     }
 }
 
-/// A JPEG's marker segments up to the compressed image data, as (marker,
-/// payload). Stops at the first malformed segment, so broken files give
-/// fewer segments rather than a panic.
-pub(crate) fn segments(jpeg: &[u8]) -> Vec<(u8, &[u8])> {
-    let mut out = Vec::new();
-    if !jpeg.starts_with(&[0xFF, 0xD8]) {
-        return out;
-    }
-    let mut i = 2;
-    while let Some(&[0xFF, marker, high, low]) = jpeg.get(i..i + 4) {
-        let len = usize::from(u16::from_be_bytes([high, low]));
-        let Some(payload) = len
-            .checked_sub(2)
-            .and_then(|body| jpeg.get(i + 4..i + 4 + body))
-        else {
-            break;
-        };
-        out.push((marker, payload));
-        if marker == 0xDA {
-            break; // start of scan: compressed data follows
-        }
-        i += 2 + len;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::geometry::place;
+    use crate::geometry::{Trim, place};
     use crate::imaging;
     use image::{Rgb, RgbImage};
 
@@ -171,8 +156,49 @@ mod tests {
     fn prepared_jpeg_carries_the_record() {
         let p = portrait();
         let blank = RgbImage::from_pixel(1181, 1772, Rgb([255; 3]));
-        let jpeg = imaging::encode_jpeg(&blank, &p, None).unwrap();
-        assert_eq!(Record::find(&jpeg).unwrap(), Record::of(&p));
+        let record = Record::of(&p);
+        let jpeg = imaging::encode_jpeg(&blank, None, &[record.segment()]).unwrap();
+        assert_eq!(Record::find(&jpeg).unwrap(), record);
+    }
+
+    /// The measured white turned back into a trim gives the configured trim:
+    /// `trim_mm` undoes `Placement::white_mm`.
+    #[test]
+    fn the_expected_white_gives_back_the_configured_trims() {
+        let cfg = Config {
+            trim_long_a_mm: 5.5,
+            trim_long_b_mm: 4.25,
+            trim_short_a_mm: 3.64,
+            trim_short_b_mm: 2.73,
+            ..Config::default()
+        };
+        let half_px_mm = px_to_mm(1) / 2.0;
+        let sizes = [
+            (5424, 3616),
+            (3616, 5424),
+            (1920, 1080),
+            (1080, 1920),
+            (1200, 1200),
+            (3000, 1000),
+            (777, 1333),
+        ];
+        let mut orientations = Vec::new();
+        for (w, h) in sizes {
+            let p = place(&cfg, w, h).unwrap();
+            let record = Record::of(&p);
+            orientations.push(record.orientation);
+            for edge in Edge::ALL {
+                let trim_mm = record.trim_mm(edge, p.white_mm(edge));
+                let configured = Trim::at(record.orientation, edge).mm(&cfg);
+                assert!(
+                    (trim_mm - configured).abs() <= half_px_mm,
+                    "{w}x{h} {edge:?}: {trim_mm} vs {configured}"
+                );
+            }
+        }
+        for orientation in Orientation::ALL {
+            assert!(orientations.contains(&orientation), "{orientation:?}");
+        }
     }
 
     #[test]
@@ -187,12 +213,10 @@ mod tests {
     fn broken_files_give_errors_not_panics() {
         let p = portrait();
         let blank = RgbImage::from_pixel(1181, 1772, Rgb([255; 3]));
-        let jpeg = imaging::encode_jpeg(&blank, &p, None).unwrap();
+        let jpeg = imaging::encode_jpeg(&blank, None, &[Record::of(&p).segment()]).unwrap();
         for cut in [0, 1, 2, 3, 5, 20, 40] {
             assert!(Record::find(&jpeg[..cut]).is_err(), "cut at {cut}");
         }
-        // A segment claiming a length of 0, which would underflow.
-        assert!(segments(&[0xFF, 0xD8, 0xFF, 0xEF, 0, 0]).is_empty());
     }
 
     #[test]

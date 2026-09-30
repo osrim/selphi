@@ -11,7 +11,8 @@ use moxcms::{ColorProfile, DataColorSpace, Layout, TransformOptions};
 mod jpeg;
 mod render;
 
-pub use jpeg::{encode_jpeg, encode_plain_jpeg};
+pub(crate) use jpeg::segments;
+pub use jpeg::{AppSegment, encode_jpeg, encode_plain_jpeg};
 pub use render::render;
 
 /// A decoded photo, turned the right way up, with the metadata we carry over.

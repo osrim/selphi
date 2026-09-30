@@ -1,23 +1,31 @@
-//! The JPEG format the SELPHY prints, with the placement record in a private
-//! segment.
+//! The JPEG format the SELPHY prints: encoding, and walking the marker
+//! segments of an encoded file.
 
 use anyhow::{Context, Result};
 use image::RgbImage;
 
-use crate::geometry::{PPI, Placement};
-use crate::record::{self, Record};
+use crate::geometry::PPI;
 
 /// JPEG quality for prints.
 const QUALITY: u8 = 88;
 
+/// An application segment to write into a JPEG.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppSegment {
+    /// The APP number, 1 to 15. APP0 holds the JFIF header, so the encoder
+    /// refuses it.
+    pub number: u8,
+    /// The segment's bytes after its length field.
+    pub payload: Vec<u8>,
+}
+
 /// Encodes the sheet as the JPEG the SELPHY accepts: baseline, 4:2:0 chroma,
-/// 300 dpi. `exif` is carried over as is. The placement is recorded in a
-/// private segment, so that `selphy adjust` can later turn measured white
-/// borders into trims.
+/// 300 dpi. `exif` is carried over as is. `segments` are written after the
+/// Exif, in the given order.
 pub fn encode_jpeg(
     sheet: &RgbImage,
-    placement: &Placement,
     exif: Option<&[u8]>,
+    segments: &[AppSegment],
 ) -> Result<Vec<u8>> {
     encode(sheet, QUALITY, |encoder| {
         if let Some(exif) = exif {
@@ -25,7 +33,11 @@ pub fn encode_jpeg(
                 .add_exif_metadata(exif)
                 .context("carrying over the Exif block")?;
         }
-        encoder.add_app_segment(record::SEGMENT, Record::of(placement).to_segment())?;
+        for segment in segments {
+            encoder
+                .add_app_segment(segment.number, segment.payload.clone())
+                .with_context(|| format!("writing the APP{} segment", segment.number))?;
+        }
         Ok(())
     })
 }
@@ -54,10 +66,36 @@ fn encode(
     Ok(bytes)
 }
 
+/// A JPEG's marker segments up to the compressed image data, as (marker,
+/// payload). Stops at the first malformed segment, so broken files give
+/// fewer segments rather than a panic.
+pub(crate) fn segments(jpeg: &[u8]) -> Vec<(u8, &[u8])> {
+    let mut out = Vec::new();
+    if !jpeg.starts_with(&[0xFF, 0xD8]) {
+        return out;
+    }
+    let mut i = 2;
+    while let Some(&[0xFF, marker, high, low]) = jpeg.get(i..i + 4) {
+        let len = usize::from(u16::from_be_bytes([high, low]));
+        let Some(payload) = len
+            .checked_sub(2)
+            .and_then(|body| jpeg.get(i + 4..i + 4 + body))
+        else {
+            break;
+        };
+        out.push((marker, payload));
+        if marker == 0xDA {
+            break; // start of scan: compressed data follows
+        }
+        i += 2 + len;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record::segments;
+    use crate::geometry::Placement;
     use crate::test_util::exif_with_orientation;
 
     fn payload<'a>(segs: &[(u8, &'a [u8])], marker: u8) -> &'a [u8] {
@@ -71,7 +109,7 @@ mod tests {
     fn encoded(exif: Option<&[u8]>) -> (Vec<u8>, Placement) {
         let p = crate::geometry::place(&crate::config::Config::default(), 300, 200).unwrap();
         let sheet = crate::imaging::render(&RgbImage::new(1, 1), &p);
-        (encode_jpeg(&sheet, &p, exif).unwrap(), p)
+        (encode_jpeg(&sheet, exif, &[]).unwrap(), p)
     }
 
     #[test]
@@ -90,6 +128,37 @@ mod tests {
         assert_eq!(frame[5], 3, "three components");
         assert_eq!(frame[7], 0x22, "luma sampled 2x2 = 4:2:0");
         assert_eq!(frame[10], 0x11, "chroma sampled 1x1");
+    }
+
+    #[test]
+    fn extra_segments_follow_the_exif_in_order() {
+        let exif = exif_with_orientation(1);
+        let sheet = RgbImage::new(8, 8);
+        let extra = [
+            AppSegment {
+                number: 15,
+                payload: b"first".to_vec(),
+            },
+            AppSegment {
+                number: 3,
+                payload: b"second".to_vec(),
+            },
+        ];
+        let jpeg = encode_jpeg(&sheet, Some(&exif), &extra).unwrap();
+        let apps: Vec<_> = segments(&jpeg)
+            .into_iter()
+            .filter(|(marker, _)| (0xE1..=0xEF).contains(marker))
+            .collect();
+        assert_eq!(apps.len(), 3, "{apps:?}");
+        assert_eq!(apps[0].0, 0xE1);
+        assert_eq!(apps[1], (0xEF, &b"first"[..]));
+        assert_eq!(apps[2], (0xE3, &b"second"[..]));
+    }
+
+    #[test]
+    fn a_zero_segment_length_ends_the_walk() {
+        // A length of 0 would underflow the payload size.
+        assert!(segments(&[0xFF, 0xD8, 0xFF, 0xEF, 0, 0]).is_empty());
     }
 
     #[test]

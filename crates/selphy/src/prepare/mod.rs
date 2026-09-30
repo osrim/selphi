@@ -12,6 +12,7 @@ use crate::atomic;
 use crate::config::Config;
 use crate::geometry::{self, Placement};
 use crate::imaging::{self, Source};
+use crate::record::Record;
 
 mod archive;
 mod inputs;
@@ -45,7 +46,8 @@ fn prepare_one(
         geometry::place(cfg, image.width(), image.height()).context("the image is empty")?;
     let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
     let sheet = imaging::render(&photo, &placement);
-    let jpeg = imaging::encode_jpeg(&sheet, &placement, camera_exif)?;
+    let record = Record::of(&placement);
+    let jpeg = imaging::encode_jpeg(&sheet, camera_exif, &[record.segment()])?;
 
     let output = out_dir.join(output_name(source)?);
     fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;

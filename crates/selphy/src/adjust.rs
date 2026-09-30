@@ -13,8 +13,9 @@ use crate::record::Record;
 /// picture lost there as a negative number. Edges not in `measured` keep
 /// their trim.
 ///
-/// The margin is canvas edge to picture edge, so the rule holds on edges
-/// with deliberate white too: trim = margin - white showing.
+/// [`Record::trim_mm`] turns each measurement into a trim: margin - white.
+/// The margin is canvas edge to picture edge, so this holds on edges with
+/// deliberate white too.
 ///
 /// A measurement that gives a negative trim, or a trim over half the
 /// canvas, is an error: it is a wrong reading. A result that leaves nothing
@@ -27,9 +28,9 @@ pub fn apply_measurements(
     let canvas = Canvas::new(cfg, record.orientation);
     let mut trims = Vec::with_capacity(measured.len());
     for &(edge, white_mm) in measured {
-        let margin_mm = px_to_mm(record.margin_px(edge));
-        let trim_mm = round_to_hundredths(margin_mm - white_mm);
+        let trim_mm = round_to_hundredths(record.trim_mm(edge, white_mm));
         if trim_mm < 0.0 {
+            let margin_mm = px_to_mm(record.margin_px(edge));
             bail!(
                 "{white_mm} mm of white on the {} edge is more than the {margin_mm:.2} mm \
                  margin the picture had there; check the measurement",
