@@ -28,12 +28,7 @@ pub struct Source {
 
 /// Decodes the photo at `path` and applies its Exif rotation.
 pub fn load(path: &Path) -> Result<Source> {
-    let mut decoder = ImageReader::open(path)
-        .with_context(|| format!("opening {}", path.display()))?
-        .with_guessed_format()?
-        .into_decoder()
-        .with_context(|| format!("reading {}", path.display()))?;
-
+    let mut decoder = open(path)?;
     let icc_profile = decoder.icc_profile()?;
     let mut exif = decoder.exif_metadata()?;
     let orientation = exif
@@ -50,6 +45,38 @@ pub fn load(path: &Path) -> Result<Source> {
         icc_profile,
         exif,
     })
+}
+
+/// The width and height of the photo at `path` after its Exif rotation, as
+/// [`load`] gives them. Reads the header and the Exif, not the pixels.
+pub fn probe(path: &Path) -> Result<(u32, u32)> {
+    let mut decoder = open(path)?;
+    let (width, height) = decoder.dimensions();
+    let orientation = decoder
+        .exif_metadata()?
+        .and_then(|chunk| ExifOrientation::from_exif_chunk(&chunk))
+        .unwrap_or(ExifOrientation::NoTransforms);
+    let turned = matches!(
+        orientation,
+        ExifOrientation::Rotate90
+            | ExifOrientation::Rotate270
+            | ExifOrientation::Rotate90FlipH
+            | ExifOrientation::Rotate270FlipH
+    );
+    Ok(if turned {
+        (height, width)
+    } else {
+        (width, height)
+    })
+}
+
+/// The decoder for the photo at `path`, which has read the header.
+fn open(path: &Path) -> Result<impl ImageDecoder> {
+    ImageReader::open(path)
+        .with_context(|| format!("opening {}", path.display()))?
+        .with_guessed_format()?
+        .into_decoder()
+        .with_context(|| format!("reading {}", path.display()))
 }
 
 /// Converts to 8-bit sRGB, which is what the SELPHY assumes. Transparency is
@@ -118,6 +145,20 @@ mod tests {
             ExifOrientation::from_exif_chunk(&exif),
             Some(ExifOrientation::NoTransforms)
         );
+    }
+
+    #[test]
+    fn probe_gives_the_rotated_size_without_decoding() {
+        let dir = fresh_dir("imaging-probe");
+        let rotated = write_jpeg(&dir.join("rotated.jpg"), 8, 4, &exif_with_orientation(6));
+        let upright = write_jpeg(&dir.join("upright.jpg"), 8, 4, &exif_with_orientation(1));
+        assert_eq!(probe(&rotated).unwrap(), (4, 8));
+        assert_eq!(probe(&upright).unwrap(), (8, 4));
+
+        let broken = dir.join("broken.jpg");
+        std::fs::write(&broken, b"not a jpeg").unwrap();
+        let err = probe(&broken).unwrap_err();
+        assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
     }
 
     /// A 1x1 RGB image of one colour.

@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 use selphy::config::{ConfigFile, PAPER_ENV};
 use selphy::paper::Paper;
@@ -38,14 +39,52 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Turn photos into print-ready JPEGs that the printer's trim never crops.
+    #[command(after_help = PREPARE_EXAMPLES)]
     Prepare(commands::prepare::PrepareArgs),
     /// Show the printer geometry and how common photo shapes land on the card.
+    #[command(after_help = CONFIG_EXAMPLES)]
     Config(commands::config::ConfigArgs),
     /// Measure the printer's trim: print a bracket sheet, then enter what survived.
+    #[command(after_help = CALIBRATE_EXAMPLES)]
     Calibrate(commands::calibrate::CalibrateArgs),
     /// Correct the trims from a printed photo: enter the white or loss on each edge.
+    #[command(after_help = ADJUST_EXAMPLES)]
     Adjust(commands::adjust::AdjustArgs),
+    /// Print the shell completion script for SHELL to stdout.
+    #[command(after_help = COMPLETIONS_EXAMPLES)]
+    Completions {
+        /// The shell to complete in.
+        shell: Shell,
+    },
 }
+
+const PREPARE_EXAMPLES: &str = "\
+Examples:
+  selphy prepare                            src/ to out/, sources moved to originals/
+  selphy prepare trip/ extra.jpg -o prints  named photos to prints/, left in place
+  selphy prepare --paper l --fit cover      for L paper, filling the card
+  selphy prepare --dry-run                  show the plan; write and move nothing";
+
+const CONFIG_EXAMPLES: &str = "\
+Examples:
+  selphy config --init                      write the values to printer.toml
+  $EDITOR \"$(selphy config --path)\"         edit it by hand";
+
+const CALIBRATE_EXAMPLES: &str = "\
+Examples:
+  selphy calibrate                          write the sheet; after printing, enter the readings
+  selphy calibrate --read                   enter the readings from a sheet printed earlier
+  selphy calibrate --read --left 2.5 --top 2.0 --right 5.5 --bottom 3.0 --yes";
+
+const ADJUST_EXAMPLES: &str = "\
+Examples:
+  selphy adjust out/a-selphy.jpg            enter the white on each edge
+  selphy adjust out/a-selphy.jpg --left 1.0 --bottom -0.5 --yes";
+
+const COMPLETIONS_EXAMPLES: &str = "\
+Examples:
+  selphy completions zsh > ~/.zfunc/_selphy
+  selphy completions bash > ~/.local/share/bash-completion/completions/selphy";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -56,8 +95,15 @@ fn main() -> ExitCode {
         Command::Config(args) => commands::config::run(args, &mut term, &file, cli.paper),
         Command::Calibrate(args) => commands::calibrate::run(args, &mut term, &file, cli.paper),
         Command::Adjust(args) => commands::adjust::run(args, &mut term, &file, cli.paper),
+        Command::Completions { shell } => completions(shell, &mut term.out),
     };
     finish(result, &mut term.err)
+}
+
+/// Writes the completion script for `shell` to `out`.
+fn completions(shell: Shell, out: &mut dyn Write) -> Result<ExitCode> {
+    clap_complete::generate(shell, &mut Cli::command(), "selphy", out);
+    Ok(ExitCode::SUCCESS)
 }
 
 /// The exit code for a command's result. An error is printed to `err`, and
@@ -78,6 +124,32 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
+
+    #[test]
+    fn the_cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn completions_for_zsh_name_the_commands() {
+        let mut out = Vec::new();
+        assert_eq!(
+            completions(Shell::Zsh, &mut out).unwrap(),
+            ExitCode::SUCCESS
+        );
+        let script = String::from_utf8(out).unwrap();
+        assert!(script.contains("prepare"), "{script}");
+    }
+
+    #[test]
+    fn calibrate_edge_flags_need_read_and_adjust_takes_negative_numbers() {
+        let parse = |args: &[&str]| Cli::try_parse_from(args).map(|_| ());
+        assert!(parse(&["selphy", "calibrate", "--left", "2.5"]).is_err());
+        assert!(parse(&["selphy", "calibrate", "--read", "--left", "2.5", "--yes"]).is_ok());
+        assert!(parse(&["selphy", "adjust", "a.jpg", "--bottom", "-0.5", "--yes"]).is_ok());
+        assert!(parse(&["selphy", "prepare", "-j", "0"]).is_err());
+        assert!(parse(&["selphy", "prepare", "-j", "2", "--dry-run"]).is_ok());
+    }
 
     #[test]
     fn an_error_is_printed_and_exits_1_and_a_cancel_exits_130() {

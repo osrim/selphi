@@ -14,12 +14,35 @@ use selphy::geometry::{Edge, px_to_mm};
 use selphy::paper::Paper;
 use selphy::record::Record;
 
+use crate::commands::given_edges;
 use crate::terminal::{Terminal, confirm_save, print_changes};
 
 #[derive(Args)]
 pub struct AdjustArgs {
     /// A JPEG written by `selphy prepare`, printed Borderless.
     file: PathBuf,
+
+    /// The white on the left edge of the card, or the picture lost there as
+    /// a negative number. With any edge flag, the edges are not asked for,
+    /// and the edges not given keep their trim.
+    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
+    left: Option<f64>,
+
+    /// The white on the top edge, or the picture lost there.
+    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
+    top: Option<f64>,
+
+    /// The white on the right edge, or the picture lost there.
+    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
+    right: Option<f64>,
+
+    /// The white on the bottom edge, or the picture lost there.
+    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
+    bottom: Option<f64>,
+
+    /// Save the trims without asking.
+    #[arg(long)]
+    yes: bool,
 }
 
 /// Asks for the white on each edge of the printed file, then offers to save
@@ -30,7 +53,8 @@ pub struct AdjustArgs {
 /// right even when the photo was prepared with an env override.
 ///
 /// A file that cannot correct the profile, such as a Fill card print, is an
-/// error before the prompts.
+/// error before the prompts. Measurements given as edge flags are not asked
+/// for, and `--yes` saves without asking.
 pub fn run(
     args: AdjustArgs,
     term: &mut Terminal,
@@ -69,11 +93,17 @@ pub fn run(
         record.orientation.name()
     )?;
 
-    let measured = ask_measurements(term)?;
+    let given = given_edges([args.left, args.top, args.right, args.bottom]);
+    let measured = if given.is_empty() {
+        term.require_prompts()?;
+        ask_measurements(term)?
+    } else {
+        given
+    };
     let updated = adjust::apply_measurements(&before, &record, &measured)?;
     print_changes(term, &before, &updated, record.orientation)?;
 
-    confirm_save(term, &loaded, &before, &updated, file)?;
+    confirm_save(term, &loaded, (&before, &updated), file, args.yes)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -120,11 +150,86 @@ mod tests {
             camera_ref: None,
             fit,
         };
+        let planned = selphy::prepare::plan(&[source], &opts.out_dir).unwrap();
         let done = Job::new(paper, profile, opts)
             .unwrap()
-            .run_one(&source)
+            .run_one(&planned[0])
             .unwrap();
         done.prepared.output
+    }
+
+    /// The args for `file` with no flags.
+    fn args(file: PathBuf) -> AdjustArgs {
+        AdjustArgs {
+            file,
+            left: None,
+            top: None,
+            right: None,
+            bottom: None,
+            yes: false,
+        }
+    }
+
+    #[test]
+    fn flags_and_yes_save_without_a_prompt_and_keep_the_other_edges() {
+        let dir = fresh_dir("cli-adjust-flags");
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        let (mut term, written) = Terminal::scripted([]);
+        let args = AdjustArgs {
+            left: Some(0.5),
+            right: Some(-0.3),
+            yes: true,
+            ..args(prepared(&dir))
+        };
+
+        let code = run(args, &mut term, &file, None).unwrap();
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(written.out().ends_with("Saved.\n"), "{}", written.out());
+        let saved = file.load(None, None).unwrap().saved_profile().unwrap();
+        assert_eq!(saved.trim_long_a_mm, 3.99);
+        assert_eq!(saved.trim_long_b_mm, 5.8);
+        // Top and bottom were not given: they keep their trim, not 0 mm of
+        // white.
+        assert_eq!(saved.trim_short_a_mm, 2.1);
+        assert_eq!(saved.trim_short_b_mm, 2.7);
+    }
+
+    #[test]
+    fn a_bad_flag_measurement_fails() {
+        let dir = fresh_dir("cli-adjust-flags-bad");
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        let (mut term, _) = Terminal::scripted([]);
+        let args = AdjustArgs {
+            left: Some(9.0),
+            yes: true,
+            ..args(prepared(&dir))
+        };
+        let err = run(args, &mut term, &file, None).unwrap_err();
+        assert!(format!("{err:#}").contains("on the left edge"), "{err:#}");
+        assert!(!file.exists().unwrap());
+    }
+
+    #[test]
+    fn no_terminal_and_no_yes_fails_with_the_hint() {
+        let dir = fresh_dir("cli-adjust-no-tty");
+        let file = ConfigFile::at(dir.join("printer.toml"));
+        let photo = prepared(&dir);
+        let flags = AdjustArgs {
+            left: Some(0.5),
+            ..args(photo.clone())
+        };
+        for case in [flags, args(photo)] {
+            let (mut term, _) = Terminal::scripted([]);
+            term.is_interactive = false;
+            let err = run(case, &mut term, &file, None).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "the prompts need a terminal; give the edges as --left/--top/--right/--bottom \
+                 and pass --yes"
+            );
+        }
+        assert!(!file.exists().unwrap());
     }
 
     fn numbers(mm: [f64; 4]) -> Vec<Answer> {
@@ -142,15 +247,7 @@ mod tests {
         let (mut term, written) = Terminal::scripted(answers);
 
         let photo = prepared(&dir);
-        let code = run(
-            AdjustArgs {
-                file: photo.clone(),
-            },
-            &mut term,
-            &file,
-            None,
-        )
-        .unwrap();
+        let code = run(args(photo.clone()), &mut term, &file, None).unwrap();
 
         assert_eq!(code, ExitCode::SUCCESS);
         let out = written.out();
@@ -183,15 +280,7 @@ mod tests {
         let dir = fresh_dir("cli-adjust-bad");
         let file = ConfigFile::at(dir.join("printer.toml"));
         let (mut term, _) = Terminal::scripted(numbers([9.0, 0.0, 0.0, 0.0]));
-        let err = run(
-            AdjustArgs {
-                file: prepared(&dir),
-            },
-            &mut term,
-            &file,
-            None,
-        )
-        .unwrap_err();
+        let err = run(args(prepared(&dir)), &mut term, &file, None).unwrap_err();
         assert!(format!("{err:#}").contains("on the left edge"), "{err:#}");
         assert!(!file.exists().unwrap());
     }
@@ -207,15 +296,7 @@ mod tests {
         answers.push(Answer::Confirm(true));
         let (mut term, written) = Terminal::scripted(answers);
 
-        run(
-            AdjustArgs {
-                file: prepared(&dir),
-            },
-            &mut term,
-            &file,
-            None,
-        )
-        .unwrap();
+        run(args(prepared(&dir)), &mut term, &file, None).unwrap();
 
         assert_eq!(
             written.err(),
@@ -252,15 +333,7 @@ mod tests {
             Answer::Confirm(true),
         ]);
 
-        run(
-            AdjustArgs {
-                file: photo.clone(),
-            },
-            &mut term,
-            &file,
-            Some(Paper::Card),
-        )
-        .unwrap();
+        run(args(photo.clone()), &mut term, &file, Some(Paper::Card)).unwrap();
 
         assert_eq!(
             written.err(),
@@ -289,7 +362,7 @@ mod tests {
         );
         let (mut term, written) = Terminal::scripted([]);
 
-        let err = run(AdjustArgs { file: photo }, &mut term, &file, None).unwrap_err();
+        let err = run(args(photo), &mut term, &file, None).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -312,7 +385,7 @@ mod tests {
             .unwrap();
         let (mut term, written) = Terminal::scripted([]);
 
-        let err = run(AdjustArgs { file: photo }, &mut term, &file, None).unwrap_err();
+        let err = run(args(photo), &mut term, &file, None).unwrap_err();
 
         assert!(
             err.to_string()

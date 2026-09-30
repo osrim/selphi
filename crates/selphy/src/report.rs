@@ -154,7 +154,8 @@ mod tests {
         )
         .unwrap();
 
-        let err = job.run_one(&bad).unwrap_err();
+        let planned = crate::prepare::plan(std::slice::from_ref(&bad), &dir.join("out")).unwrap();
+        let err = job.run_one(&planned[0]).unwrap_err();
         let text = photo_error(&err, &bad);
         assert!(!text.contains(&bad.display().to_string()), "{text}");
         assert!(!text.contains("broken.jpg"), "{text}");

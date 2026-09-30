@@ -51,6 +51,7 @@ Turns photos into print-ready JPEGs.
 selphy prepare                       # src/ -> out/, sources moved to originals/
 selphy prepare photo.jpg trip/       # named files and folders
 selphy prepare -o prints/ trip/      # write somewhere else than out/
+selphy prepare --dry-run             # show the plan; write and move nothing
 ```
 
 | Option | Meaning |
@@ -61,8 +62,15 @@ selphy prepare -o prints/ trip/      # write somewhere else than out/
 | `--no-archive` | Leave finished sources where they are. |
 | `--camera-ref <FILE>` | An unedited camera JPEG. Its Exif is written into every output, for printers that reject edited files. Also read from `$CAMERA_REF`. |
 | `--fit <contain\|cover>` | How a photo fills the card: `contain` (Whole photo) or `cover` (Fill card). Default: the config's `fit`, else `contain`. Also read from `$SELPHY_FIT`. |
+| `-j, --jobs <N>` | How many photos to prepare at once. Default: the number of cores, at most 4, because each one holds a decoded photo. |
+| `--dry-run` | Print each photo's output, placement and archive path. Nothing is written or moved. |
 
 Paths are relative to the current directory.
+
+Two sources that would write the same output, such as `a/x.jpg` and
+`b/x.jpg`, or `x.jpg` and `x.png`, are an error before any photo is
+prepared. The error names each pair. Names that differ only in case count as
+the same output.
 
 For each photo, `prepare`:
 
@@ -105,9 +113,21 @@ edge; a cover photo reports the photo cut off on each edge, not counting the
 1 failed and left in place
 ```
 
-The exit code is 1 when any photo failed. When no images are found, it says
+The lines are in input order, whatever order the workers finish in. The
+exit code is 1 when any photo failed. When no images are found, it says
 "No images in …" on stderr and exits 0. The progress bar is shown only when
 stderr is a terminal.
+
+`--dry-run` reads only each photo's header, so it is fast on a large folder.
+It prints `→` lines in place of `✓` lines, and reports a file it cannot read
+on stderr with exit 1, as a real run does. A photo whose pixels are broken
+passes a dry run and fails the real run.
+
+```
+→ src/a.jpg  → out/a-selphy.jpg  portrait, stretched 1.9%, edge to edge  (archive: originals/a.jpg)
+
+Dry run: nothing written.
+```
 
 ### `selphy-gui`
 
@@ -188,6 +208,7 @@ selphy calibrate                          # write the sheet, then enter the read
 selphy calibrate --sheet-only             # only write calibration-landscape.jpg
 selphy calibrate --read                   # enter readings from a sheet printed earlier
 selphy calibrate --paper card             # measure card paper
+selphy calibrate --read --left 2.5 --top 2.0 --right 5.5 --bottom 3.0 --yes
 ```
 
 The readings are saved to the paper's table. The other papers' tables stay
@@ -207,9 +228,12 @@ confirm.
 | `--read` | Do not write the sheet; ask for the readings. |
 | `-o, --out <FILE>` | Where to write the sheet. Default: `calibration-<orientation>.jpg`. |
 | `--font <FILE>` | The TrueType font for the labels. Default: Arial from macOS. Also read from `$SELPHY_FONT`. |
+| `--left`, `--top`, `--right`, `--bottom <MM>` | The reading on that edge. Needs `--read`. With any of them, no edge is asked for, and the edges not given keep their trim. Each must be a line on the sheet: 1.5, 2.0, … 5.5. |
+| `--yes` | Save without asking. |
 
-The readings need a terminal. Without one, `calibrate` writes the sheet and
-tells you, on stderr, the command to enter the readings later.
+The prompts need a terminal. Without one, `calibrate` writes the sheet and
+tells you, on stderr, the command to enter the readings later. To save
+without a terminal, give the readings as edge flags and pass `--yes`.
 
 ### `selphy adjust`
 
@@ -217,7 +241,8 @@ Corrects the trims from measurements of a printed photo. This is finer than
 `calibrate`, which measures in 0.5 mm steps.
 
 ```sh
-selphy adjust out/photo-selphy.jpg
+selphy adjust out/photo-selphy.jpg                              # asks for each edge
+selphy adjust out/photo-selphy.jpg --left 1.0 --bottom -0.5 --yes
 ```
 
 Print a JPEG from `selphy prepare` Borderless, and hold the card in the
@@ -240,17 +265,35 @@ The file must hold a placement record, which only `selphy prepare` writes.
 `adjust` refuses a file made by an older selphy, and a file whose canvas
 differs from the paper's current canvas: prepare and print it again. It also
 refuses a Fill card print, because its margins do not show the trim: prepare
-the photo with `--fit contain` to measure it. The
-prompts need a terminal.
+the photo with `--fit contain` to measure it.
+
+| Option | Meaning |
+|---|---|
+| `--left`, `--top`, `--right`, `--bottom <MM>` | The number for that edge, as above. With any of them, no edge is asked for, and the edges not given keep their trim. |
+| `--yes` | Save without asking. |
+
+The prompts need a terminal. To save without one, give the edges as flags
+and pass `--yes`.
 
 `calibrate` and `adjust` save the file's values with the new trims, never the
 env overrides. For each trim they save while an env var overrides it, they
 warn on stderr that the saved value is not used while the var is set.
 
+### `selphy completions`
+
+Prints the completion script for a shell: `bash`, `elvish`, `fish`,
+`powershell` or `zsh`.
+
+```sh
+selphy completions zsh > ~/.zfunc/_selphy
+```
+
+For zsh, `~/.zfunc` must be in `fpath` before `compinit` runs.
+
 ## Output and exit codes
 
 stdout gets results and tables: the prepared photos, the summary, the
-`config` output, the change tables, "Saved.", "Not saved." and "Wrote …".
+dry-run plan, the `config` output, the change tables, "Saved.", "Not saved." and "Wrote …".
 stderr gets problems and hints: failed photos, "No images in …", the "Not a
 terminal" hint, override warnings and `error: …`.
 

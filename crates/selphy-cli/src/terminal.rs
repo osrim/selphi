@@ -9,6 +9,8 @@
 //!   "Wrote …".
 //! - stderr: problems and hints. Failed photos, "N failed", "No images in …",
 //!   the "Not a terminal" hint, override warnings and "error: …".
+//!   A dry run's `→` lines and "Dry run: nothing written." go to stdout, and
+//!   its failed photos to stderr, as in a real run.
 //!
 //! The exit code:
 //!
@@ -31,6 +33,10 @@ use inquire::{Confirm, CustomType, InquireError, Select};
 use selphy::config::fields::Field;
 use selphy::config::{ConfigFile, Loaded, Profile};
 use selphy::geometry::{Edge, Orientation, Trim};
+
+/// Why a command that must ask cannot, and how to run it without prompts.
+const NEEDS_A_TERMINAL: &str =
+    "the prompts need a terminal; give the edges as --left/--top/--right/--bottom and pass --yes";
 
 /// The answer to a prompt was Esc or Ctrl-C.
 #[derive(Debug)]
@@ -83,6 +89,15 @@ impl Terminal {
             is_interactive: io::stdin().is_terminal(),
             show_progress: io::stderr().is_terminal(),
         }
+    }
+
+    /// Fails with the hint to use the edge flags and `--yes` when no one is
+    /// there to answer the prompts. Call it before the first prompt.
+    pub fn require_prompts(&self) -> Result<()> {
+        if !self.is_interactive {
+            bail!(NEEDS_A_TERMINAL);
+        }
+        Ok(())
     }
 
     /// Asks yes or no.
@@ -144,14 +159,15 @@ pub fn print_changes(
 
 /// Warns on stderr for each trim that `updated` changes from `before` while
 /// an env var overrides it, then asks whether to save `updated` as the
-/// profile of `loaded.paper`, and saves it on yes. The other papers' tables
-/// are kept.
+/// profile of `loaded.paper`, and saves it on yes. With `yes`, it saves
+/// without asking; without it, asking needs a terminal. The other papers'
+/// tables are kept.
 pub fn confirm_save(
     term: &mut Terminal,
     loaded: &Loaded,
-    before: &Profile,
-    updated: &Profile,
+    (before, updated): (&Profile, &Profile),
     file: &ConfigFile,
+    yes: bool,
 ) -> Result<()> {
     for trim in Trim::ALL {
         let field = Field::for_trim(trim);
@@ -163,7 +179,10 @@ pub fn confirm_save(
             )?;
         }
     }
-    if term.confirm(&format!("Save to {}?", file.path().display()), true)? {
+    if !yes {
+        term.require_prompts()?;
+    }
+    if yes || term.confirm(&format!("Save to {}?", file.path().display()), true)? {
         file.save(&loaded.saved.with_profile(loaded.paper, updated.clone()))?;
         writeln!(term.out, "Saved.")?;
     } else {
@@ -221,7 +240,7 @@ fn answer<T>(result: Result<T, InquireError>) -> Result<T> {
         Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
             Err(Cancelled.into())
         }
-        Err(InquireError::NotTTY) => bail!("the prompts need a terminal"),
+        Err(InquireError::NotTTY) => bail!(NEEDS_A_TERMINAL),
         Err(err) => Err(err.into()),
     }
 }

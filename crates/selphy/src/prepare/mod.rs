@@ -1,7 +1,7 @@
 //! The `prepare` job: turns photos into print-ready JPEGs one file at a time,
-//! so that one bad file never stops the batch.
+//! so that one bad file never stops the batch. [`plan`] names each output
+//! first, and refuses a batch in which two sources would write one output.
 
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,8 +18,8 @@ use crate::record::Record;
 mod archive;
 mod inputs;
 
-use archive::archive;
-pub use inputs::collect_inputs;
+use archive::{archive, free_name};
+pub use inputs::{Planned, collect_inputs, plan};
 
 /// What preparing one photo produced.
 #[derive(Debug)]
@@ -28,17 +28,6 @@ pub struct Prepared {
     pub output: PathBuf,
     /// Where the picture went on the canvas.
     pub placement: Placement,
-}
-
-/// `photo.v2.png` becomes `photo.v2-selphy.jpg`: only the last extension is
-/// replaced.
-fn output_name(source: &Path) -> Result<OsString> {
-    let mut name = source
-        .file_stem()
-        .with_context(|| format!("{} has no file name", source.display()))?
-        .to_os_string();
-    name.push("-selphy.jpg");
-    Ok(name)
 }
 
 /// Where a job reads and writes.
@@ -63,12 +52,22 @@ pub struct Done {
     pub archived: Option<PathBuf>,
 }
 
+/// What preparing one photo would do, from its header only.
+#[derive(Debug)]
+pub struct Dry {
+    /// Where the picture would go on the canvas.
+    pub placement: Placement,
+    /// Where the source would be moved, when archiving, as the archive
+    /// folder is now.
+    pub archived: Option<PathBuf>,
+}
+
 /// One configured prepare run. `new` checks what it can before the first
-/// photo; `run_one` then prepares one source per call, so that the caller
-/// decides the order, the progress display, and when to stop.
+/// photo; `run_one` then prepares one planned source per call, so that the
+/// caller decides the order, the progress display, and when to stop.
 ///
-/// A clone shares the camera Exif, so a clone is cheap to move to another
-/// thread.
+/// A job is `Send + Sync`, so threads can share one by reference. A clone
+/// shares the camera Exif, so a clone is cheap to move to another thread.
 #[derive(Debug, Clone)]
 pub struct Job {
     paper: Paper,
@@ -103,31 +102,52 @@ impl Job {
         &self.opts
     }
 
-    /// Prepares `source` into the output folder, then archives it when the
-    /// job has an archive folder. A failed photo is not archived, so it stays
-    /// where it was for inspection.
-    pub fn run_one(&self, source: &Path) -> Result<Done> {
-        let prepared = self.prepare(source)?;
+    /// Prepares the planned source into its output, then archives it when
+    /// the job has an archive folder. A failed photo is not archived, so it
+    /// stays where it was for inspection.
+    pub fn run_one(&self, planned: &Planned) -> Result<Done> {
+        let prepared = self.prepare(planned)?;
         let archived = match &self.opts.archive_dir {
             // Named, so that an archive failure does not read like a failed
             // prepare once the source path is left out.
             Some(dir) => Some(
-                archive(source, dir).with_context(|| format!("archiving to {}", dir.display()))?,
+                archive(&planned.source, dir)
+                    .with_context(|| format!("archiving to {}", dir.display()))?,
             ),
             None => None,
         };
         Ok(Done { prepared, archived })
     }
 
-    /// Prepares `source` and writes it to `<out_dir>/<name>-selphy.jpg`. The
-    /// photo's own Exif is not carried over: it names the editing software,
+    /// What `run_one` would do with the planned source, without writing or
+    /// moving anything. Reads only the photo's header, so a photo whose
+    /// pixels or colour profile are broken passes here and fails in
+    /// `run_one`.
+    pub fn plan_one(&self, planned: &Planned) -> Result<Dry> {
+        let (width, height) = imaging::probe(&planned.source)?;
+        let placement = geometry::place(&self.profile, width, height, self.opts.fit)
+            .context("the image is empty")?;
+        let archived = self
+            .opts
+            .archive_dir
+            .as_deref()
+            .map(|dir| free_name(dir, &planned.source))
+            .transpose()?;
+        Ok(Dry {
+            placement,
+            archived,
+        })
+    }
+
+    /// Prepares the planned source and writes it to its output. The photo's
+    /// own Exif is not carried over: it names the editing software,
     /// which some printers reject, and its resolution tags contradict the
     /// 300 dpi header. The camera reference's Exif, when given, is written
     /// instead.
-    fn prepare(&self, source: &Path) -> Result<Prepared> {
+    fn prepare(&self, planned: &Planned) -> Result<Prepared> {
         let Source {
             image, icc_profile, ..
-        } = imaging::load(source)?;
+        } = imaging::load(&planned.source)?;
         let placement =
             geometry::place(&self.profile, image.width(), image.height(), self.opts.fit)
                 .context("the image is empty")?;
@@ -136,9 +156,11 @@ impl Job {
         let record = Record::of(self.paper, &placement);
         let jpeg = imaging::encode_jpeg(&sheet, self.camera_exif.as_deref(), &[record.segment()])?;
 
-        let out_dir = &self.opts.out_dir;
-        let output = out_dir.join(output_name(source)?);
-        fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+        let output = planned.output.clone();
+        if let Some(out_dir) = output.parent() {
+            fs::create_dir_all(out_dir)
+                .with_context(|| format!("creating {}", out_dir.display()))?;
+        }
         atomic::write(&output, jpeg)?;
         Ok(Prepared { output, placement })
     }
@@ -179,7 +201,7 @@ mod tests {
         let source = source_jpeg(&dir, "photo.v2.jpg", &exif_with_orientation(1));
         let out = dir.join("out");
 
-        let done = job(&dir, false).prepare(&source).unwrap();
+        let done = job(&dir, false).prepare(&planned(&dir, &source)).unwrap();
         assert_eq!(done.output, out.join("photo.v2-selphy.jpg"));
         let written = image::open(&done.output).unwrap();
         assert_eq!((written.width(), written.height()), (1772, 1181));
@@ -203,7 +225,7 @@ mod tests {
             camera_exif: Some(Arc::from(camera.clone())),
             ..job(&dir, false)
         };
-        let done = job.prepare(&source).unwrap();
+        let done = job.prepare(&planned(&dir, &source)).unwrap();
         assert_eq!(exif_of(&done.output), Some(camera));
     }
 
@@ -213,9 +235,15 @@ mod tests {
         let bad = dir.join("broken.jpg");
         fs::write(&bad, b"not a jpeg").unwrap();
         let out = dir.join("out");
-        let err = job(&dir, false).prepare(&bad).unwrap_err();
+        let err = job(&dir, false).prepare(&planned(&dir, &bad)).unwrap_err();
         assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
         assert!(!out.exists(), "nothing is written for a failed photo");
+    }
+
+    /// The plan for `source` into `dir/out`, where [`options`] writes.
+    fn planned(dir: &Path, source: &Path) -> Planned {
+        let mut planned = plan(&[source.to_path_buf()], &dir.join("out")).unwrap();
+        planned.remove(0)
     }
 
     fn options(dir: &Path, archive: bool) -> Options {
@@ -242,7 +270,7 @@ mod tests {
         let job = job(&dir, true);
         let results: Vec<_> = [&good_a, &bad, &good_c]
             .into_iter()
-            .map(|source| job.run_one(source))
+            .map(|source| job.run_one(&planned(&dir, source)))
             .collect();
 
         let ok: Vec<bool> = results.iter().map(Result::is_ok).collect();
@@ -262,7 +290,7 @@ mod tests {
         let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
         fs::write(dir.join("originals"), b"a file, not a folder").unwrap();
 
-        let err = job(&dir, true).run_one(&photo).unwrap_err();
+        let err = job(&dir, true).run_one(&planned(&dir, &photo)).unwrap_err();
         assert!(err.to_string().starts_with("archiving to "), "{err:#}");
         assert!(
             photo.exists(),
@@ -274,7 +302,7 @@ mod tests {
     fn without_an_archive_dir_sources_stay_put() {
         let dir = fresh_dir("batch-no-archive");
         let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
-        let done = job(&dir, false).run_one(&photo).unwrap();
+        let done = job(&dir, false).run_one(&planned(&dir, &photo)).unwrap();
         assert_eq!(done.archived, None);
         assert!(photo.exists());
     }
@@ -293,7 +321,11 @@ mod tests {
         };
         let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
         for source in [a, b] {
-            let output = job.run_one(&source).unwrap().prepared.output;
+            let output = job
+                .run_one(&planned(&dir, &source))
+                .unwrap()
+                .prepared
+                .output;
             assert_eq!(exif_of(&output), Some(exif_with_orientation(1)));
         }
     }
@@ -322,7 +354,8 @@ mod tests {
         let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
         let clone = job.clone();
 
-        let from_job = job.run_one(&a).unwrap().prepared.output;
+        let from_job = job.run_one(&planned(&dir, &a)).unwrap().prepared.output;
+        let b = planned(&dir, &b);
         let from_clone = std::thread::spawn(move || clone.run_one(&b).unwrap().prepared.output)
             .join()
             .unwrap();
@@ -336,11 +369,45 @@ mod tests {
         let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
         let l = Paper::L.starting_profile();
         let job = Job::new(Paper::L, l, options(&dir, false)).unwrap();
-        let output = job.run_one(&photo).unwrap().prepared.output;
+        let output = job.run_one(&planned(&dir, &photo)).unwrap().prepared.output;
         let record = Record::read(&output).unwrap();
         assert_eq!(record.paper, Paper::L);
         // 119 x 89 mm at 300 ppi.
         assert_eq!(record.canvas_px, (1406, 1051));
+    }
+
+    #[test]
+    fn plan_one_gives_the_real_placement_and_writes_nothing() {
+        let dir = fresh_dir("batch-dry");
+        let photo = write_jpeg(&dir.join("a.jpg"), 320, 180, &exif_with_orientation(6));
+        fs::create_dir(dir.join("originals")).unwrap();
+        fs::write(dir.join("originals/a.jpg"), b"archived earlier").unwrap();
+        let job = job(&dir, true);
+        let planned = planned(&dir, &photo);
+
+        let dry = job.plan_one(&planned).unwrap();
+
+        assert_eq!(dry.archived, Some(dir.join("originals/a-2.jpg")));
+        assert!(!dir.join("out").exists(), "nothing is written");
+        assert!(photo.exists(), "the source stays in place");
+        let done = job.run_one(&planned).unwrap();
+        assert_eq!(dry.placement, done.prepared.placement);
+        assert_eq!(done.archived, dry.archived);
+    }
+
+    #[test]
+    fn plan_one_reports_a_broken_file() {
+        let dir = fresh_dir("batch-dry-bad");
+        let bad = dir.join("broken.jpg");
+        fs::write(&bad, b"not a jpeg").unwrap();
+        let err = job(&dir, false).plan_one(&planned(&dir, &bad)).unwrap_err();
+        assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
+    }
+
+    #[test]
+    fn a_job_can_be_shared_by_threads() {
+        fn shared<T: Send + Sync>() {}
+        shared::<Job>();
     }
 
     #[test]
@@ -352,7 +419,7 @@ mod tests {
             ..options(&dir, false)
         };
         let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
-        let prepared = job.run_one(&photo).unwrap().prepared;
+        let prepared = job.run_one(&planned(&dir, &photo)).unwrap().prepared;
         assert_eq!(prepared.placement.fit, Fit::Cover);
         assert_eq!(Record::read(&prepared.output).unwrap().fit, Fit::Cover);
     }

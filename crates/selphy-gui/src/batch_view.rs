@@ -224,7 +224,9 @@ impl BatchView {
     }
 
     /// Prepares every photo in the batch, one at a time on a background
-    /// thread, reading the config file afresh as `selphy prepare` does.
+    /// thread, reading the config file afresh as `selphy prepare` does. Two
+    /// photos that would write one output are an error before any is
+    /// prepared.
     fn prepare(&mut self, _: &Prepare, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_ready() {
             return;
@@ -232,11 +234,25 @@ impl BatchView {
         let Some(job) = self.job(window, cx) else {
             return;
         };
-        let queue = self.batch.start();
+        let sources: Vec<PathBuf> = self
+            .batch
+            .photos()
+            .iter()
+            .map(|photo| photo.source().to_path_buf())
+            .collect();
+        let planned = match prepare::plan(&sources, &job.options().out_dir) {
+            Ok(planned) => planned,
+            Err(err) => {
+                show_error("Couldn't start preparing", error_sentence(&err), window, cx);
+                return;
+            }
+        };
+        let ids = self.batch.start().into_iter().map(|(id, _)| id);
+        let queue: Vec<_> = ids.zip(planned).collect();
         self.summary = None;
         self.cancelling = false;
         self.run = Some(cx.spawn(async move |this, cx| {
-            for (id, source) in queue {
+            for (id, planned) in queue {
                 let go_on = this.update(cx, |this, cx| {
                     if this.cancelling {
                         return false;
@@ -253,8 +269,8 @@ impl BatchView {
                 let job = job.clone();
                 let status = cx
                     .background_spawn(async move {
-                        let result = job.run_one(&source);
-                        Status::from_result(&result, &source)
+                        let result = job.run_one(&planned);
+                        Status::from_result(&result, &planned.source)
                     })
                     .await;
                 this.update(cx, |this, cx| {

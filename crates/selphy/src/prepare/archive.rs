@@ -31,7 +31,7 @@ pub fn archive(source: &Path, archive_dir: &Path) -> Result<PathBuf> {
 
 /// The first of `name.ext`, `name-2.ext`, `name-3.ext`, ... that does not
 /// exist in `dir`.
-fn free_name(dir: &Path, source: &Path) -> Result<PathBuf> {
+pub(super) fn free_name(dir: &Path, source: &Path) -> Result<PathBuf> {
     let stem = source
         .file_stem()
         .with_context(|| format!("{} has no file name", source.display()))?;
