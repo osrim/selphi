@@ -22,6 +22,8 @@ pub enum Orientation {
 }
 
 impl Orientation {
+    pub const ALL: [Orientation; 2] = [Orientation::Landscape, Orientation::Portrait];
+
     /// Square pictures count as landscape.
     pub fn of(width: u32, height: u32) -> Self {
         if height > width {

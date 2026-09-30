@@ -9,16 +9,12 @@ use image::metadata::Orientation as ExifOrientation;
 use image::{DynamicImage, ImageDecoder, ImageReader, Rgb, RgbImage};
 use moxcms::{ColorProfile, DataColorSpace, Layout, TransformOptions};
 
-use crate::geometry::{Edge, PPI, Placement};
+use crate::geometry::{PPI, Placement};
+use crate::record::{self, Record};
 
 /// JPEG quality for prints, the same number the bash version gave
 /// ImageMagick. The two encoders' scales are similar but not identical.
 const QUALITY: u8 = 88;
-
-/// The APP segment that records the placement, and its signature. APP15 is
-/// not used by any common format.
-const RECORD_SEGMENT: u8 = 15;
-pub const RECORD_SIGNATURE: &[u8] = b"selphy\0";
 
 /// Unsharp mask after resizing, matching the bash version's ImageMagick
 /// `-unsharp 0x0.75+0.75+0.008`: blur sigma, strength, and the smallest
@@ -144,7 +140,7 @@ pub fn encode_jpeg(
                 .add_exif_metadata(exif)
                 .context("carrying over the Exif block")?;
         }
-        encoder.add_app_segment(RECORD_SEGMENT, placement_record(placement))?;
+        encoder.add_app_segment(record::SEGMENT, Record::of(placement).to_segment())?;
         Ok(())
     })
 }
@@ -173,16 +169,6 @@ fn encode(
     Ok(bytes)
 }
 
-/// `selphy\0` then text: the orientation and the canvas-to-picture margin on
-/// each edge in pixels, e.g. `v1 portrait left=32 top=53 right=25 bottom=65`.
-fn placement_record(placement: &Placement) -> Vec<u8> {
-    let mut text = format!("v1 {}", placement.canvas.orientation.name());
-    for edge in Edge::ALL {
-        text.push_str(&format!(" {}={}", edge.name(), placement.margin(edge)));
-    }
-    [RECORD_SIGNATURE, text.as_bytes()].concat()
-}
-
 fn sharpen(image: &RgbImage) -> RgbImage {
     let blurred = imageops::blur(image, SHARPEN_SIGMA);
     let mut out = image.clone();
@@ -200,6 +186,7 @@ fn sharpen(image: &RgbImage) -> RgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::record::segments;
     use crate::test_util::{exif_with_orientation, fresh_dir};
 
     #[test]
@@ -311,22 +298,6 @@ mod tests {
         assert_eq!(out.get_pixel(0, 0).0[0], 50, "far from the edge unchanged");
     }
 
-    /// The JPEG's marker segments up to the image data, as (marker, payload).
-    fn segments(jpeg: &[u8]) -> Vec<(u8, &[u8])> {
-        let mut out = Vec::new();
-        let mut i = 2; // skip the start-of-image marker
-        while i + 4 <= jpeg.len() && jpeg[i] == 0xFF {
-            let marker = jpeg[i + 1];
-            let len = usize::from(u16::from_be_bytes([jpeg[i + 2], jpeg[i + 3]]));
-            out.push((marker, &jpeg[i + 4..i + 2 + len]));
-            if marker == 0xDA {
-                break; // start of scan: compressed data follows
-            }
-            i += 2 + len;
-        }
-        out
-    }
-
     fn payload<'a>(segs: &[(u8, &'a [u8])], marker: u8) -> &'a [u8] {
         segs.iter()
             .find(|(m, _)| *m == marker)
@@ -357,20 +328,6 @@ mod tests {
         assert_eq!(frame[5], 3, "three components");
         assert_eq!(frame[7], 0x22, "luma sampled 2x2 = 4:2:0");
         assert_eq!(frame[10], 0x11, "chroma sampled 1x1");
-    }
-
-    #[test]
-    fn jpeg_records_the_placement() {
-        let (jpeg, p) = encoded(None);
-        let record = payload(&segments(&jpeg), 0xE0 + RECORD_SEGMENT);
-        let expected = format!(
-            "selphy\0v1 landscape left={} top={} right={} bottom={}",
-            p.x,
-            p.y,
-            p.margin(Edge::Right),
-            p.margin(Edge::Bottom)
-        );
-        assert_eq!(record, expected.as_bytes());
     }
 
     #[test]

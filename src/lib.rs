@@ -6,6 +6,7 @@ pub mod config;
 pub mod geometry;
 pub mod imaging;
 pub mod prepare;
+pub mod record;
 
 #[cfg(test)]
 mod test_util;
