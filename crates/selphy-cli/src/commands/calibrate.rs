@@ -7,17 +7,23 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
-use clap::{Args, ValueEnum};
+use clap::{ArgGroup, Args, ValueEnum};
 
 use selphy::calibrate::{self, CANDIDATES_MM};
 use selphy::config::{ConfigFile, Profile};
 use selphy::geometry::{Edge, Fit, Orientation, Trim};
 use selphy::paper::Paper;
 
-use crate::commands::given_edges;
-use crate::terminal::{Terminal, confirm_save, print_changes};
+use crate::commands::EdgeArgs;
+use crate::terminal::{Change, Terminal, confirm_save, print_changes};
 
 #[derive(Args)]
+#[command(group(
+    ArgGroup::new("edges")
+        .args(["left", "top", "right", "bottom"])
+        .multiple(true)
+        .requires("read")
+))]
 pub struct CalibrateArgs {
     /// The orientation of the sheet. Either one measures all four trims.
     #[arg(long, value_enum, default_value_t = SheetOrientation::Landscape)]
@@ -39,27 +45,9 @@ pub struct CalibrateArgs {
     #[arg(long, env = "SELPHY_FONT", default_value = calibrate::DEFAULT_FONT)]
     font: PathBuf,
 
-    /// The reading on the left edge: the smallest number whose line still
-    /// shows. With any edge flag, the edges are not asked for, and the edges
-    /// not given keep their trim.
-    #[arg(long, value_name = "MM", requires = "read")]
-    left: Option<f64>,
-
-    /// The reading on the top edge.
-    #[arg(long, value_name = "MM", requires = "read")]
-    top: Option<f64>,
-
-    /// The reading on the right edge.
-    #[arg(long, value_name = "MM", requires = "read")]
-    right: Option<f64>,
-
-    /// The reading on the bottom edge.
-    #[arg(long, value_name = "MM", requires = "read")]
-    bottom: Option<f64>,
-
-    /// Save the trims without asking.
-    #[arg(long)]
-    yes: bool,
+    // The readings: on each edge, the smallest number whose line still shows.
+    #[command(flatten, next_help_heading = "Readings without prompts (need --read)")]
+    edges: EdgeArgs,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -92,10 +80,6 @@ pub fn run(
     paper: Option<Paper>,
 ) -> Result<ExitCode> {
     let orientation = Orientation::from(args.orientation);
-    let given = given_edges([args.left, args.top, args.right, args.bottom]);
-    for &(_, mm) in &given {
-        check_line(mm)?;
-    }
     // Sheets have no picture, so the fit is not read.
     let loaded = file.load(paper, Some(Fit::Contain))?;
     let paper = loaded.paper;
@@ -137,20 +121,23 @@ pub fn run(
         }
     }
 
-    let readings = if given.is_empty() {
-        term.require_prompts()?;
-        ask_readings(term, &before, orientation)?
-    } else {
-        given
-    };
+    let readings = args
+        .edges
+        .edges_or_ask(term, |term| ask_readings(term, &before, orientation))?;
+    for &(_, mm) in &readings {
+        check_line(mm)?;
+    }
     if readings.is_empty() {
         writeln!(term.out, "No readings; nothing changed.")?;
         return Ok(ExitCode::SUCCESS);
     }
-    let updated = before.with_trims(orientation, &readings)?;
-    print_changes(term, &before, &updated, orientation)?;
-
-    confirm_save(term, &loaded, (&before, &updated), file, args.yes)?;
+    let change = Change {
+        after: before.with_trims(orientation, &readings)?,
+        before,
+        orientation,
+    };
+    print_changes(term, &change)?;
+    confirm_save(term, &loaded, &change, file, args.edges.yes)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -214,7 +201,7 @@ fn ask_readings(
 
 /// Fails when `mm` is not one of the lines on the sheet.
 fn check_line(mm: f64) -> Result<()> {
-    if CANDIDATES_MM.contains(&mm) {
+    if CANDIDATES_MM.iter().any(|line| (line - mm).abs() < 1e-9) {
         return Ok(());
     }
     let lines: Vec<String> = CANDIDATES_MM.iter().map(|mm| format!("{mm:.1}")).collect();
@@ -260,20 +247,19 @@ mod tests {
             read: true,
             out: None,
             font: PathBuf::from(calibrate::DEFAULT_FONT),
-            left: None,
-            top: None,
-            right: None,
-            bottom: None,
-            yes: false,
+            edges: EdgeArgs::none(),
         }
     }
 
     /// `--read` with the readings as flags.
     fn flag_args(left: Option<f64>, top: Option<f64>, yes: bool) -> CalibrateArgs {
         CalibrateArgs {
-            left,
-            top,
-            yes,
+            edges: EdgeArgs {
+                left,
+                top,
+                yes,
+                ..EdgeArgs::none()
+            },
             ..read_args()
         }
     }

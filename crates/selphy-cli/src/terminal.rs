@@ -34,10 +34,6 @@ use selphy::config::fields::Field;
 use selphy::config::{ConfigFile, Loaded, Profile};
 use selphy::geometry::{Edge, Orientation, Trim};
 
-/// Why a command that must ask cannot, and how to run it without prompts.
-const NEEDS_A_TERMINAL: &str =
-    "the prompts need a terminal; give the edges as --left/--top/--right/--bottom and pass --yes";
-
 /// The answer to a prompt was Esc or Ctrl-C.
 #[derive(Debug)]
 pub struct Cancelled;
@@ -91,15 +87,6 @@ impl Terminal {
         }
     }
 
-    /// Fails with the hint to use the edge flags and `--yes` when no one is
-    /// there to answer the prompts. Call it before the first prompt.
-    pub fn require_prompts(&self) -> Result<()> {
-        if !self.is_interactive {
-            bail!(NEEDS_A_TERMINAL);
-        }
-        Ok(())
-    }
-
     /// Asks yes or no.
     pub fn confirm(&mut self, message: &str, default: bool) -> Result<bool> {
         self.prompts.confirm(message, default)
@@ -136,20 +123,28 @@ impl Terminal {
     }
 }
 
+/// A paper's profile before and after new trims, with the orientation the
+/// trims were measured in.
+pub struct Change {
+    pub before: Profile,
+    pub after: Profile,
+    pub orientation: Orientation,
+}
+
 /// The trims on each edge before and after, with changed ones marked.
-pub fn print_changes(
-    term: &mut Terminal,
-    before: &Profile,
-    after: &Profile,
-    orientation: Orientation,
-) -> Result<()> {
+pub fn print_changes(term: &mut Terminal, change: &Change) -> Result<()> {
+    let Change {
+        before,
+        after,
+        orientation,
+    } = change;
     writeln!(
         term.out,
         "\nTrim, mm ({})   before  after",
         orientation.name()
     )?;
     for edge in Edge::ALL {
-        let trim = Trim::at(orientation, edge);
+        let trim = Trim::at(*orientation, edge);
         let (old, new) = (trim.mm(before), trim.mm(after));
         let mark = if old == new { "" } else { "  *" };
         writeln!(term.out, "  {:<18}{old:>6.2}{new:>7.2}{mark}", edge.name())?;
@@ -157,21 +152,21 @@ pub fn print_changes(
     Ok(())
 }
 
-/// Warns on stderr for each trim that `updated` changes from `before` while
-/// an env var overrides it, then asks whether to save `updated` as the
-/// profile of `loaded.paper`, and saves it on yes. With `yes`, it saves
-/// without asking; without it, asking needs a terminal. The other papers'
-/// tables are kept.
+/// Warns on stderr for each trim that the change makes while an env var
+/// overrides it, then asks whether to save the new profile as the profile of
+/// `loaded.paper`, and saves it on yes. With `yes`, it saves without asking.
+/// The other papers' tables are kept.
 pub fn confirm_save(
     term: &mut Terminal,
     loaded: &Loaded,
-    (before, updated): (&Profile, &Profile),
+    change: &Change,
     file: &ConfigFile,
     yes: bool,
 ) -> Result<()> {
+    let Change { before, after, .. } = change;
     for trim in Trim::ALL {
         let field = Field::for_trim(trim);
-        if trim.mm(updated) != trim.mm(before) && loaded.override_of(field).is_some() {
+        if trim.mm(after) != trim.mm(before) && loaded.override_of(field).is_some() {
             writeln!(
                 term.err,
                 "{} is set; the saved value is not used while it is",
@@ -179,11 +174,8 @@ pub fn confirm_save(
             )?;
         }
     }
-    if !yes {
-        term.require_prompts()?;
-    }
     if yes || term.confirm(&format!("Save to {}?", file.path().display()), true)? {
-        file.save(&loaded.saved.with_profile(loaded.paper, updated.clone()))?;
+        file.save(&loaded.saved.with_profile(loaded.paper, after.clone()))?;
         writeln!(term.out, "Saved.")?;
     } else {
         writeln!(term.out, "Not saved.")?;
@@ -240,7 +232,7 @@ fn answer<T>(result: Result<T, InquireError>) -> Result<T> {
         Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
             Err(Cancelled.into())
         }
-        Err(InquireError::NotTTY) => bail!(NEEDS_A_TERMINAL),
+        Err(InquireError::NotTTY) => bail!("the prompts need a terminal"),
         Err(err) => Err(err.into()),
     }
 }

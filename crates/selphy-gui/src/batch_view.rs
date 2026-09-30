@@ -234,12 +234,8 @@ impl BatchView {
         let Some(job) = self.job(window, cx) else {
             return;
         };
-        let sources: Vec<PathBuf> = self
-            .batch
-            .photos()
-            .iter()
-            .map(|photo| photo.source().to_path_buf())
-            .collect();
+        let (ids, sources): (Vec<_>, Vec<_>) = self.batch.queue().into_iter().unzip();
+        // The plan keeps the order of `sources`, so it pairs with `ids`.
         let planned = match prepare::plan(&sources, &job.options().out_dir) {
             Ok(planned) => planned,
             Err(err) => {
@@ -247,8 +243,8 @@ impl BatchView {
                 return;
             }
         };
-        let ids = self.batch.start().into_iter().map(|(id, _)| id);
-        let queue: Vec<_> = ids.zip(planned).collect();
+        self.batch.start();
+        let queue: Vec<_> = ids.into_iter().zip(planned).collect();
         self.summary = None;
         self.cancelling = false;
         self.run = Some(cx.spawn(async move |this, cx| {

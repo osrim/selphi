@@ -14,35 +14,18 @@ use selphy::geometry::{Edge, px_to_mm};
 use selphy::paper::Paper;
 use selphy::record::Record;
 
-use crate::commands::given_edges;
-use crate::terminal::{Terminal, confirm_save, print_changes};
+use crate::commands::EdgeArgs;
+use crate::terminal::{Change, Terminal, confirm_save, print_changes};
 
 #[derive(Args)]
 pub struct AdjustArgs {
     /// A JPEG written by `selphy prepare`, printed Borderless.
     file: PathBuf,
 
-    /// The white on the left edge of the card, or the picture lost there as
-    /// a negative number. With any edge flag, the edges are not asked for,
-    /// and the edges not given keep their trim.
-    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
-    left: Option<f64>,
-
-    /// The white on the top edge, or the picture lost there.
-    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
-    top: Option<f64>,
-
-    /// The white on the right edge, or the picture lost there.
-    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
-    right: Option<f64>,
-
-    /// The white on the bottom edge, or the picture lost there.
-    #[arg(long, value_name = "MM", allow_negative_numbers = true)]
-    bottom: Option<f64>,
-
-    /// Save the trims without asking.
-    #[arg(long)]
-    yes: bool,
+    // The measurements: the white on each edge of the card, or the picture
+    // lost there as a negative number.
+    #[command(flatten, next_help_heading = "Measurements without prompts")]
+    edges: EdgeArgs,
 }
 
 /// Asks for the white on each edge of the printed file, then offers to save
@@ -93,17 +76,14 @@ pub fn run(
         record.orientation.name()
     )?;
 
-    let given = given_edges([args.left, args.top, args.right, args.bottom]);
-    let measured = if given.is_empty() {
-        term.require_prompts()?;
-        ask_measurements(term)?
-    } else {
-        given
+    let measured = args.edges.edges_or_ask(term, ask_measurements)?;
+    let change = Change {
+        after: adjust::apply_measurements(&before, &record, &measured)?,
+        before,
+        orientation: record.orientation,
     };
-    let updated = adjust::apply_measurements(&before, &record, &measured)?;
-    print_changes(term, &before, &updated, record.orientation)?;
-
-    confirm_save(term, &loaded, (&before, &updated), file, args.yes)?;
+    print_changes(term, &change)?;
+    confirm_save(term, &loaded, &change, file, args.edges.yes)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -162,11 +142,7 @@ mod tests {
     fn args(file: PathBuf) -> AdjustArgs {
         AdjustArgs {
             file,
-            left: None,
-            top: None,
-            right: None,
-            bottom: None,
-            yes: false,
+            edges: EdgeArgs::none(),
         }
     }
 
@@ -176,9 +152,12 @@ mod tests {
         let file = ConfigFile::at(dir.join("printer.toml"));
         let (mut term, written) = Terminal::scripted([]);
         let args = AdjustArgs {
-            left: Some(0.5),
-            right: Some(-0.3),
-            yes: true,
+            edges: EdgeArgs {
+                left: Some(0.5),
+                right: Some(-0.3),
+                yes: true,
+                ..EdgeArgs::none()
+            },
             ..args(prepared(&dir))
         };
 
@@ -201,8 +180,11 @@ mod tests {
         let file = ConfigFile::at(dir.join("printer.toml"));
         let (mut term, _) = Terminal::scripted([]);
         let args = AdjustArgs {
-            left: Some(9.0),
-            yes: true,
+            edges: EdgeArgs {
+                left: Some(9.0),
+                yes: true,
+                ..EdgeArgs::none()
+            },
             ..args(prepared(&dir))
         };
         let err = run(args, &mut term, &file, None).unwrap_err();
@@ -216,7 +198,10 @@ mod tests {
         let file = ConfigFile::at(dir.join("printer.toml"));
         let photo = prepared(&dir);
         let flags = AdjustArgs {
-            left: Some(0.5),
+            edges: EdgeArgs {
+                left: Some(0.5),
+                ..EdgeArgs::none()
+            },
             ..args(photo.clone())
         };
         for case in [flags, args(photo)] {

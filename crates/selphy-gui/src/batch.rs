@@ -108,15 +108,19 @@ impl Batch {
         self.photos.clear();
     }
 
-    /// Marks every photo as waiting and returns them, for a new run.
-    pub fn start(&mut self) -> Vec<(PhotoId, PathBuf)> {
+    /// Every photo's id and source, in list order, for a new run.
+    pub fn queue(&self) -> Vec<(PhotoId, PathBuf)> {
         self.photos
-            .iter_mut()
-            .map(|photo| {
-                photo.status = Status::Waiting;
-                (photo.id, photo.source.clone())
-            })
+            .iter()
+            .map(|photo| (photo.id, photo.source.clone()))
             .collect()
+    }
+
+    /// Marks every photo as waiting, for a new run.
+    pub fn start(&mut self) {
+        for photo in &mut self.photos {
+            photo.status = Status::Waiting;
+        }
     }
 
     /// Sets the status of `id`. A photo removed since the run started is
@@ -177,7 +181,8 @@ mod tests {
     fn start_resets_results_and_counts_follow_status() {
         let mut batch = Batch::default();
         batch.add(paths(&["a.jpg", "b.jpg", "c.jpg"]));
-        let queue = batch.start();
+        let queue = batch.queue();
+        batch.start();
         batch.set_status(queue[0].0, Status::Prepared("ok".into()));
         batch.set_status(queue[1].0, Status::Failed("bad".into()));
         assert_eq!(batch.counts(), (1, 1));
@@ -196,7 +201,8 @@ mod tests {
     fn a_result_for_a_removed_photo_is_ignored() {
         let mut batch = Batch::default();
         batch.add(paths(&["a.jpg"]));
-        let queue = batch.start();
+        let queue = batch.queue();
+        batch.start();
         batch.clear();
         batch.set_status(queue[0].0, Status::Prepared("ok".into()));
         assert!(batch.is_empty());
