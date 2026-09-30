@@ -131,31 +131,38 @@ Dry run: nothing written.
 
 ### `selphy-gui`
 
-A window for `prepare`. Drop photos or folders on it, or use Add…. Choose the
-folder the prints go to (on macOS it starts at `~/Pictures`), then Prepare.
-Each photo shows its result or its error. Cancel stops the run after the
-photo in progress. Sources are not moved, and no camera reference is used. It
-prepares for the paper and with the fit that `selphy prepare` uses without
-`--paper` and `--fit`.
+A window for `prepare`. Drop photos or folders on the photo list, or use
+Add…. Select a photo to see its card as it will print, with the trim zone
+hatched and the placement under it. The preview uses the same code as
+Prepare. Choose the paper and the fit in the toolbar, and the output folder
+(`~/Pictures/SELPHY` at first). Prepare prepares the photos in parallel and
+shows the progress; each row shows its result or its error. Cancel stops the
+run after the photos in progress. Sources are not moved, and no camera
+reference is used. An uncalibrated paper cannot be prepared for.
 
-The gear button (Cmd-,) opens the Config dialog. It has two sections:
+Remove and Clear can be undone. The window remembers the paper, the fit, the
+output folder and the theme in `gui.toml` next to the printer config. The
+command line does not read this file.
 
-- Appearance: the theme, System, Light or Dark. It is saved to `gui.toml`
-  next to the printer config. The command line does not read this file.
-- Printer: the postcard profile's four trims, canvas and largest stretch.
-  They are saved to the `[postcard]` table of the config file that the
-  command line reads. The other papers' tables are kept.
+Settings… (Cmd-,) opens the Settings window:
 
-Restore defaults puts the default values in every field. Nothing is written
-until Save.
+- Printer: one paper's four trims, canvas and max stretch. Save writes them
+  to that paper's table of the config file that the command line reads, and
+  makes that paper the window's paper. The other tables are kept. Save
+  Calibration Sheet… writes the paper's sheet. Restore Defaults puts the
+  paper's starting values in the fields; nothing is written until Save.
+- Appearance: the theme, System, Light or Dark.
 
 | Key | Command |
 |---|---|
 | Cmd-O | Add photos |
 | Cmd-Shift-O | Choose the output folder |
-| Enter | Prepare |
+| Cmd-Return | Prepare |
 | Escape | Cancel the run |
-| Cmd-, | Config |
+| Up, Down | Move the selection |
+| Delete, Backspace | Remove the selected photo |
+| Cmd-Z, Cmd-Shift-Z | Undo, Redo |
+| Cmd-, | Settings |
 
 ### `selphy config`
 
@@ -370,11 +377,10 @@ print on.
 | `SELPHY_TRIM_SHORT_B_MM` | `trim_short_b_mm` |
 | `SELPHY_MAX_STRETCH_PCT` | `max_stretch_pct` |
 
-`selphy-gui` uses the same file (`$SELPHY_CONFIG` if set), the same paper
-(`$SELPHY_PAPER`, else the file's `paper`), the same fit (`$SELPHY_FIT`, else
-the file's `fit`) and the same overrides when it
-prepares photos. Its Config dialog shows and saves the file's postcard
-values, without the overrides, and keeps the other tables.
+`selphy-gui` uses the same file (`$SELPHY_CONFIG` if set) and the same
+overrides when it prepares photos. It uses its own paper and fit, from its
+toolbar. Its Printer pane shows and saves the file's values, without the
+overrides, and names the overrides that are set.
 
 To edit the values: run `selphy config --init`, then open the file with
 `$EDITOR "$(selphy config --path)"`. `selphy` rewrites the file, so comments

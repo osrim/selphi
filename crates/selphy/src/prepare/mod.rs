@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use image::RgbImage;
+use image::imageops::{self, FilterType};
 
 use crate::atomic;
 use crate::config::Profile;
@@ -50,6 +52,17 @@ pub struct Done {
     pub prepared: Prepared,
     /// Where the source went, when archiving.
     pub archived: Option<PathBuf>,
+}
+
+/// How one photo would print, drawn small for a screen.
+#[derive(Debug)]
+pub struct Preview {
+    /// The rendered canvas, scaled down to the requested side.
+    pub image: RgbImage,
+    /// Where the picture goes on the canvas.
+    pub placement: Placement,
+    /// The source's width and height, the right way up.
+    pub source_size: (u32, u32),
 }
 
 /// What preparing one photo would do, from its header only.
@@ -139,20 +152,43 @@ impl Job {
         })
     }
 
+    /// How `source` would print: the canvas `run_one` would write, from the
+    /// same pipeline, scaled down so that its longer side is `max_side_px`.
+    /// Nothing is encoded or written.
+    pub fn preview(&self, source: &Path, max_side_px: u32) -> Result<Preview> {
+        let (sheet, placement, source_size) = self.render(source)?;
+        let (width, height) = sheet.dimensions();
+        let image = match imaging::fit_within(width, height, max_side_px) {
+            Some((w, h)) => imageops::resize(&sheet, w, h, FilterType::Triangle),
+            None => sheet,
+        };
+        Ok(Preview {
+            image,
+            placement,
+            source_size,
+        })
+    }
+
+    /// Loads `source`, places it, converts it to sRGB and renders the
+    /// canvas. Returns the canvas, the placement and the source's size.
+    fn render(&self, source: &Path) -> Result<(RgbImage, Placement, (u32, u32))> {
+        let Source {
+            image, icc_profile, ..
+        } = imaging::load(source)?;
+        let size = (image.width(), image.height());
+        let placement = geometry::place(&self.profile, size.0, size.1, self.opts.fit)
+            .context("the image is empty")?;
+        let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
+        Ok((imaging::render(&photo, &placement), placement, size))
+    }
+
     /// Prepares the planned source and writes it to its output. The photo's
     /// own Exif is not carried over: it names the editing software,
     /// which some printers reject, and its resolution tags contradict the
     /// 300 dpi header. The camera reference's Exif, when given, is written
     /// instead.
     fn prepare(&self, planned: &Planned) -> Result<Prepared> {
-        let Source {
-            image, icc_profile, ..
-        } = imaging::load(&planned.source)?;
-        let placement =
-            geometry::place(&self.profile, image.width(), image.height(), self.opts.fit)
-                .context("the image is empty")?;
-        let photo = imaging::to_srgb(image, icc_profile.as_deref())?;
-        let sheet = imaging::render(&photo, &placement);
+        let (sheet, placement, _) = self.render(&planned.source)?;
         let record = Record::of(self.paper, &placement);
         let jpeg = imaging::encode_jpeg(&sheet, self.camera_exif.as_deref(), &[record.segment()])?;
 
@@ -401,6 +437,54 @@ mod tests {
         let bad = dir.join("broken.jpg");
         fs::write(&bad, b"not a jpeg").unwrap();
         let err = job(&dir, false).plan_one(&planned(&dir, &bad)).unwrap_err();
+        assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
+    }
+
+    #[test]
+    fn a_preview_places_the_photo_as_run_one_does_and_writes_nothing() {
+        let dir = fresh_dir("batch-preview");
+        let photo = write_jpeg(&dir.join("a.jpg"), 320, 180, &exif_with_orientation(6));
+        for fit in [Fit::Contain, Fit::Cover] {
+            let opts = Options {
+                fit,
+                ..options(&dir, false)
+            };
+            let job = Job::new(Paper::Postcard, postcard(), opts).unwrap();
+
+            let preview = job.preview(&photo, 400).unwrap();
+            assert!(!dir.join("out").exists(), "{fit}: nothing is written");
+            assert_eq!(preview.source_size, (180, 320), "{fit}");
+
+            let done = job.run_one(&planned(&dir, &photo)).unwrap();
+            assert_eq!(preview.placement, done.prepared.placement, "{fit}");
+            fs::remove_dir_all(dir.join("out")).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_preview_has_the_canvas_aspect_and_fits_the_side() {
+        let dir = fresh_dir("batch-preview-size");
+        let photo = source_jpeg(&dir, "a.jpg", &exif_with_orientation(1));
+        let preview = job(&dir, false).preview(&photo, 300).unwrap();
+        let canvas = &preview.placement.canvas;
+        // 1772 x 1181 scaled to 300 on the long side.
+        assert_eq!(preview.image.dimensions(), (300, 200));
+        let aspect = |w: f64, h: f64| w / h;
+        let (w, h) = preview.image.dimensions();
+        assert!(
+            (aspect(f64::from(w), f64::from(h))
+                - aspect(canvas.width as f64, canvas.height as f64))
+            .abs()
+                < 0.01
+        );
+    }
+
+    #[test]
+    fn a_preview_of_a_broken_photo_is_an_error() {
+        let dir = fresh_dir("batch-preview-bad");
+        let bad = dir.join("broken.jpg");
+        fs::write(&bad, b"not a jpeg").unwrap();
+        let err = job(&dir, false).preview(&bad, 300).unwrap_err();
         assert!(format!("{err:#}").contains("broken.jpg"), "{err:#}");
     }
 

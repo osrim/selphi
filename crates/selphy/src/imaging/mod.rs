@@ -4,8 +4,9 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use image::imageops::FilterType;
 use image::metadata::Orientation as ExifOrientation;
-use image::{DynamicImage, ImageDecoder, ImageReader, Rgb, RgbImage};
+use image::{DynamicImage, GenericImageView as _, ImageDecoder, ImageReader, Rgb, RgbImage};
 use moxcms::{ColorProfile, DataColorSpace, Layout, TransformOptions};
 
 mod jpeg;
@@ -68,6 +69,34 @@ pub fn probe(path: &Path) -> Result<(u32, u32)> {
     } else {
         (width, height)
     })
+}
+
+/// The photo at `path` in sRGB, turned the right way up and scaled down so
+/// that its longer side is at most `max_side_px`, for a list or a preview.
+/// A smaller photo keeps its size. The `image` 0.25 JPEG decoder cannot
+/// decode at a reduced size, so the photo is decoded at full size.
+pub fn thumbnail(path: &Path, max_side_px: u32) -> Result<RgbImage> {
+    let Source {
+        image, icc_profile, ..
+    } = load(path)?;
+    let (width, height) = image.dimensions();
+    let small = match fit_within(width, height, max_side_px) {
+        Some((w, h)) => image.resize_exact(w, h, FilterType::Triangle),
+        None => image,
+    };
+    to_srgb(small, icc_profile.as_deref())
+}
+
+/// The size of a `width` x `height` image scaled down, with its aspect kept,
+/// so that its longer side is `max_side_px`. `None` when it already fits.
+pub(crate) fn fit_within(width: u32, height: u32, max_side_px: u32) -> Option<(u32, u32)> {
+    let longer = width.max(height);
+    if longer <= max_side_px {
+        return None;
+    }
+    let scale = f64::from(max_side_px) / f64::from(longer);
+    let side = |px: u32| ((f64::from(px) * scale).round() as u32).max(1);
+    Some((side(width), side(height)))
 }
 
 /// The decoder for the photo at `path`, which has read the header.
@@ -211,6 +240,29 @@ mod tests {
         let gray = ColorProfile::new_gray_with_gamma(2.2).encode().unwrap();
         let err = to_srgb(pixel([200, 100, 50]), Some(&gray)).unwrap_err();
         assert!(format!("{err:#}").contains("Gray"), "{err:#}");
+    }
+
+    #[test]
+    fn a_thumbnail_is_turned_upright_and_fits_the_side() {
+        let dir = fresh_dir("imaging-thumbnail");
+        let rotated = write_jpeg(
+            &dir.join("rotated.jpg"),
+            300,
+            200,
+            &exif_with_orientation(6),
+        );
+        let thumb = thumbnail(&rotated, 60).unwrap();
+        assert_eq!(thumb.dimensions(), (40, 60));
+
+        let wide = write_jpeg(&dir.join("wide.jpg"), 320, 180, &exif_with_orientation(1));
+        assert_eq!(thumbnail(&wide, 64).unwrap().dimensions(), (64, 36));
+    }
+
+    #[test]
+    fn a_small_photo_is_not_enlarged_into_a_thumbnail() {
+        let dir = fresh_dir("imaging-thumbnail-small");
+        let small = write_jpeg(&dir.join("small.jpg"), 30, 20, &exif_with_orientation(1));
+        assert_eq!(thumbnail(&small, 64).unwrap().dimensions(), (30, 20));
     }
 
     #[test]
