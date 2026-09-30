@@ -28,8 +28,9 @@ pub struct AdjustArgs {
 }
 
 /// Asks for the white on each edge of the printed file, then offers to save
-/// the corrected trims. The trims are computed from the record's margins, so starting from the file's values is
-/// right even when the photo was prepared with an env override.
+/// the corrected trims. The trims come from the record's margins, so
+/// starting from the file's values is right even when the photo was
+/// prepared with an env override.
 ///
 /// A file that cannot correct the profile, such as a Cover print, is an
 /// error before the prompts. Measurements given as edge flags are not asked

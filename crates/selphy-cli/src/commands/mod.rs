@@ -1,5 +1,3 @@
-//! One module per subcommand.
-
 pub mod adjust;
 pub mod calibrate;
 pub mod config;
@@ -61,7 +59,6 @@ impl EdgeArgs {
         }
     }
 
-    /// The edges given as flags.
     fn given(&self) -> Vec<(Edge, f64)> {
         [
             (Edge::Left, self.left),

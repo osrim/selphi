@@ -1,8 +1,5 @@
-//! The printer config: the default fit, the output settings and the
-//! postcard [`Profile`].
-//! [`ConfigFile`] stores it as TOML at `~/.config/selphy/printer.toml`. A
-//! missing file means "use the defaults": the values measured on the first
-//! SELPHY CP1500 this ran on.
+//! The printer config and the postcard [`Profile`]. [`ConfigFile`] stores it
+//! as TOML.
 
 use std::fmt;
 
@@ -18,11 +15,9 @@ use crate::geometry::{Edge, Fit, Orientation, Trim, mm_to_px};
 use crate::imaging::{Background, Look, Sharpening};
 use crate::paper::Paper;
 
-/// The config file: the default fit, the output settings and the
-/// `[postcard]` table. Without a table, postcard uses
-/// [`Paper::default_profile`]. Keys missing from the table take their value
-/// from it. A missing output setting is its default. Unknown keys are an
-/// error.
+/// The default fit, the output settings and the `[postcard]` table. Keys
+/// missing from the table, or the whole table, come from
+/// [`Paper::default_profile`]. Unknown keys are an error.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawConfig")]
 pub struct Config {
@@ -126,8 +121,7 @@ fn fill_in(table: toml::Table) -> Result<Profile, String> {
         .map_err(|err: toml::de::Error| err.to_string())
 }
 
-/// The printer geometry for postcard paper: the canvas, the four trims, and
-/// the max stretch.
+/// The printer geometry for postcard paper.
 ///
 /// Trims are millimetres of canvas the printer loses on each edge in
 /// Borderless mode. They are named for the LANDSCAPE canvas: long A is the

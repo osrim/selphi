@@ -188,7 +188,6 @@ fn ask_readings(
     Ok(readings)
 }
 
-/// Fails when `mm` is not one of the lines on the sheet.
 fn check_line(mm: f64) -> Result<()> {
     if CANDIDATES_MM.iter().any(|line| (line - mm).abs() < 1e-9) {
         return Ok(());
@@ -200,7 +199,6 @@ fn check_line(mm: f64) -> Result<()> {
     )
 }
 
-/// The index of the candidate closest to `mm`.
 fn nearest_candidate(mm: f64) -> usize {
     CANDIDATES_MM
         .iter()

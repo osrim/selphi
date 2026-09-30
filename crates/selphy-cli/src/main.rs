@@ -95,7 +95,6 @@ fn main() -> ExitCode {
     finish(result, &mut term.err)
 }
 
-/// Writes the completion script for `shell` to `out`.
 fn completions(shell: Shell, out: &mut dyn Write) -> Result<ExitCode> {
     clap_complete::generate(shell, &mut Cli::command(), "selphy", out);
     Ok(ExitCode::SUCCESS)

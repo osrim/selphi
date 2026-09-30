@@ -67,7 +67,6 @@ fn main() {
         });
 }
 
-/// Binds the keys and sets the menus.
 fn init_app(cx: &mut App) {
     // Keys before menus: `set_menus` reads the keymap when it is called.
     cx.bind_keys([

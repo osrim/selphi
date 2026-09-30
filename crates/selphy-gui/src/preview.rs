@@ -1,7 +1,8 @@
 //! The card preview: the selected photo rendered by `Job::preview`, the
-//! same code as Prepare: the card inside a dashed line at the paper's edge,
-//! the rest of the picture dimmed around it, and the placement under it. A render made for another photo or an older revision is
-//! dropped when it arrives.
+//! same code as Prepare. The card sits inside a dashed line at the paper's
+//! edge, with the rest of the picture dimmed around it and the placement
+//! under it. A render made for another photo or an older revision is dropped
+//! when it arrives.
 
 use std::path::PathBuf;
 use std::sync::Arc;

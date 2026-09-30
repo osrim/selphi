@@ -1,8 +1,7 @@
-//! The Printer section of the Settings window: the postcard profile's four
-//! trims by edge of a landscape print, its canvas and max stretch. The
-//! window saves it, with the output settings, on top of the loaded file, so
-//! that the fit is kept. Field
-//! errors name the edge or field that failed.
+//! The Printer section of the Settings window: the postcard profile's trims
+//! by edge of a landscape print, its canvas and max stretch. The window saves
+//! it on top of the loaded file, so that the fit is kept. Field errors name
+//! the edge or field that failed.
 
 use std::path::PathBuf;
 

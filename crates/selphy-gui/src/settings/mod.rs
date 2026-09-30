@@ -1,10 +1,8 @@
 //! The Settings window, opened with Settings… (Cmd-,): the printer profile,
 //! the output settings and the theme. Save checks the values, writes
-//! `printer.toml` then
-//! `gui.toml`, and closes the window. Cancel, Escape or closing the window
-//! keeps the files as they were and puts the previous theme back. There is
-//! one Settings window; opening it again brings it to the front. Closing it
-//! leaves the app running.
+//! `printer.toml` then `gui.toml`, and closes the window. Cancel, Escape or
+//! closing the window keeps the files as they were and puts the previous
+//! theme back. Closing it leaves the app running.
 
 use gpui_kit::component::{
     ActiveTheme as _, StyledExt as _,
@@ -225,7 +223,7 @@ impl Render for SettingsWindow {
     }
 }
 
-/// Opens the Settings window, or brings it to the front when it is open.
+/// Opens the Settings window, or brings the open one to the front.
 pub fn open(prefs: Entity<Prefs>, cx: &mut App) -> anyhow::Result<AnyWindowHandle> {
     if let Some(handle) = cx.default_global::<SettingsWindowHandle>().0
         && handle

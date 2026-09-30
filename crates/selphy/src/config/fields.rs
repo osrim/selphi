@@ -1,7 +1,6 @@
-//! The one list of `Profile` fields: each field's TOML key, its env var, and
-//! where it lives in `Profile`. The env overrides go over [`FIELDS`], and
-//! `Trim` and the GUI's inputs reach their fields through it, so a new field
-//! is added here and nowhere else.
+//! The one list of `Profile` fields, with each field's TOML key and env var.
+//! The env overrides, `Trim` and the GUI's inputs all go through [`FIELDS`],
+//! so a new field is added here and nowhere else.
 
 use super::Profile;
 use crate::geometry::Trim;
@@ -40,7 +39,6 @@ impl Field {
     }
 }
 
-/// Fields are equal when their keys are.
 impl PartialEq for Field {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key

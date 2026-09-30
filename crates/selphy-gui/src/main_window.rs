@@ -92,7 +92,6 @@ impl MainWindow {
         this
     }
 
-    /// Sets how many photos a run prepares at once.
     #[cfg(test)]
     pub fn set_worker_limit(&mut self, limit: usize) {
         self.worker_limit = limit.max(1);

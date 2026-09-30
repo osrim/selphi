@@ -1,8 +1,5 @@
 //! The printer config file, and the env vars that override its values for
-//! one run. The fit resolves in this order: the caller's value (the command
-//! line), then `SELPHY_FIT`, then the file, then contain. Each
-//! profile value resolves as env, then file, then defaults. An override is
-//! never written to the file.
+//! one run. An override is never written to the file.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -33,9 +30,8 @@ const HEADER: &str = "\
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
     path: PathBuf,
-    /// The raw values of the env vars that are set. `load` parses them.
+    /// Raw, so that a bad value is an error from `load`, not from `locate`.
     env_values: Vec<(&'static Field, OsString)>,
-    /// The raw value of `SELPHY_FIT`, when it is set.
     env_fit: Option<OsString>,
 }
 
@@ -48,7 +44,6 @@ pub struct Loaded {
     pub fit: Fit,
     /// The overrides that are set, in the order of the field table.
     pub overrides: Vec<Override>,
-    /// The file's path, for the error messages.
     path: PathBuf,
 }
 

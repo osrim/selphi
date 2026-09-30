@@ -87,12 +87,10 @@ impl Terminal {
         }
     }
 
-    /// Asks yes or no.
     pub fn confirm(&mut self, message: &str, default: bool) -> Result<bool> {
         self.prompts.confirm(message, default)
     }
 
-    /// Asks for one of `options`, and returns its index.
     pub fn select(
         &mut self,
         message: &str,
@@ -103,7 +101,6 @@ impl Terminal {
         self.prompts.select(message, options, start, help)
     }
 
-    /// Asks for a finite number.
     pub fn number(&mut self, message: &str, default: f64, help: &str) -> Result<f64> {
         self.prompts.number(message, default, help)
     }

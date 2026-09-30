@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Profile;
 
-/// A SELPHY paper size. It names the physical card, not the image. selphy
-/// prepares for postcard paper only; the placement record names it, so that
-/// another size can be told apart if it is added.
+/// A SELPHY paper size: the physical card, not the image. The placement
+/// record names it, so that a later size can be told apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Paper {
@@ -30,8 +29,7 @@ impl Paper {
         }
     }
 
-    /// The built-in profile: the values measured on the first SELPHY CP1500
-    /// this ran on.
+    /// The values measured on the first SELPHY CP1500 this ran on.
     pub fn default_profile(self) -> Profile {
         match self {
             Self::Postcard => Profile {

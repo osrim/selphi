@@ -167,7 +167,6 @@ pub fn run(args: PrepareArgs, term: &mut Terminal, file: &ConfigFile) -> Result<
     Ok(ExitCode::SUCCESS)
 }
 
-/// The number of cores, at most [`MAX_DEFAULT_JOBS`].
 fn default_jobs() -> usize {
     thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)

@@ -167,7 +167,6 @@ impl Batch {
         self.commit(rest);
     }
 
-    /// Removes the selected photo, if any.
     pub fn remove_selected(&mut self) {
         if let Some(id) = self.selected {
             self.remove(id);

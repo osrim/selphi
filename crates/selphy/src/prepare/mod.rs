@@ -198,8 +198,6 @@ impl Job {
         })
     }
 
-    /// Loads `source`, places it, converts it to sRGB and renders the
-    /// canvas.
     fn render(&self, source: &Path) -> Result<Rendered> {
         let Source {
             image, icc_profile, ..
@@ -254,7 +252,6 @@ mod tests {
     use crate::test_util::postcard;
     use crate::test_util::{exif_with_orientation, fresh_dir, write_jpeg};
 
-    /// Writes a 300x200 grey JPEG with the given Exif block, returns its path.
     fn source_jpeg(dir: &Path, name: &str, exif: &[u8]) -> PathBuf {
         write_jpeg(&dir.join(name), 300, 200, exif)
     }
