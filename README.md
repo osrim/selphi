@@ -12,6 +12,8 @@ of the page that reaches the card.
 It is a side project for trying out [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), through
 [gpui-kit](https://crates.io/crates/gpui-kit).
 
+<img width="1000" height="713" alt="Screenshot 2026-10-01 at 21 42 28" src="https://github.com/user-attachments/assets/0f64ad5e-0a33-4339-b51b-023ccaa1b998" />
+
 ## Install
 
 On an Apple Silicon Mac:
