@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/selphy", "crates/selphy-cli"]
+default-members = ["crates/selphi", "crates/selphi-cli"]
 
 [workspace.package]
 edition = "2024"
@@ -9,7 +9,7 @@ version = "0.1.0"
 rust-version = "1.98.1"
 
 [workspace.dependencies]
-selphy = { path = "crates/selphy" }
+selphi = { path = "crates/selphi" }
 ab_glyph = "0.2.32"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env"] }

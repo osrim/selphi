@@ -6379,7 +6379,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ab42ca02749e120097e328d91d415325bdf43b1c72c4c8badf37375fe40a813"
 
 [[package]]
-name = "selphy"
+name = "selphi"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
@@ -6394,7 +6394,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "selphy-cli"
+name = "selphi-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -6402,17 +6402,17 @@ dependencies = [
  "clap_complete",
  "indicatif",
  "inquire",
- "selphy",
+ "selphi",
 ]
 
 [[package]]
-name = "selphy-gui"
+name = "selphi-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
  "image",
- "selphy",
+ "selphi",
  "serde",
 ]
 

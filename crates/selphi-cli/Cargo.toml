@@ -1,0 +1,23 @@
+[package]
+name = "selphi-cli"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "selphi"
+path = "src/main.rs"
+
+[dependencies]
+selphi = { workspace = true, features = ["clap"] }
+anyhow.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+indicatif.workspace = true
+inquire.workspace = true
+
+[dev-dependencies]
+selphi = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
